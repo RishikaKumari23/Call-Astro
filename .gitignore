@@ -1,0 +1,24 @@
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# Node/Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.DS_Store
+
+# Python/Backend
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+backend/astro_chat.db
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
