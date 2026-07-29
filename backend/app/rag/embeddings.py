@@ -1,7 +1,7 @@
 import requests
 from typing import List, Optional
-from backend.app.config.settings import settings
-from backend.app.utils.logger import logger
+from app.config.settings import settings
+from app.utils.logger import logger
 
 class EmbeddingsProvider:
     def __init__(self):
@@ -50,7 +50,14 @@ class EmbeddingsProvider:
         if self.provider == "ollama":
             # For Ollama, we can call in a batch if the server supports `/api/embed`, 
             # otherwise fetch individually.
-            return [self._get_ollama_embedding(text) for text in texts]
+            embeddings = []
+
+            for i, text in enumerate(texts):
+             logger.info(f"Embedding {i+1}/{len(texts)}")
+             embeddings.append(self._get_ollama_embedding(text))
+
+            return embeddings  
+           
         elif self.provider == "local":
             if not self.local_model:
                 self._load_local_model()

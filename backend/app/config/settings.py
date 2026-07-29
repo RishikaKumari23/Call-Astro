@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     TOP_K_RETRIEVAL: int = 4
     HYBRID_ALPHA: float = 0.5 # Balance weight between lexical (BM25) and vector cosine search
 
+    # Dasha Lambda (separate, bearer-token-authenticated API providing
+    # real calculated Mahadasha/Antardasha/Pratyantardasha with actual dates)
+    DASHA_LAMBDA_URL: str = "https://bivrov2febq5ued37psv2hcxyi0wlxet.lambda-url.ap-south-1.on.aws/"
+    DASHA_LAMBDA_BEARER_TOKEN: str = "f83c6105-1731-4cd9-9d94-9543ff01bfe1"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -2,11 +2,12 @@ import threading
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.app.config.settings import settings
-from backend.app.utils.logger import logger
-from backend.app.api import chat, session, ingest
-from backend.app.memory.database import db
-from backend.app.rag.indexer import document_indexer
+from app.config.settings import settings
+from app.utils.logger import logger
+from app.api import chat, session, ingest
+from app.memory.database import db
+from app.rag.indexer import document_indexer
+from app.rag.vector_store import vector_store
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -25,14 +26,26 @@ app.add_middleware(
 
 # Background indexing task (runs in separate thread)
 def background_index_knowledge_base():
-    """Run knowledge base indexing in background thread"""
-    logger.info("Performing automatic knowledge base indexing in background...")
+    """Run knowledge base indexing in background thread.
+    Skips entirely if a valid vector store already exists on disk —
+    only new/unindexed files get processed (incremental indexing)."""
+    logger.info("Checking knowledge base index status...")
     try:
-        processed_files, chunks_count = document_indexer.ingest_knowledge_base()
-        if chunks_count > 0:
-            logger.info(f"✓ Knowledge base indexed successfully: {chunks_count} chunks from {len(processed_files)} files")
+        if vector_store.vectors is not None and len(vector_store.chunks) > 0:
+            logger.info(f"✓ Existing vector store loaded: {len(vector_store.chunks)} chunks already indexed.")
+            # Still check for any NEW files that weren't indexed yet
+            processed_files, total_chunks = document_indexer.ingest_knowledge_base(force_rebuild=False)
+            if processed_files:
+                logger.info(f"✓ Indexed {len(processed_files)} new file(s), added chunks. Total now: {len(vector_store.chunks)}")
+            else:
+                logger.info("No new files to index — knowledge base up to date.")
         else:
-            logger.warning("⚠ No documents found in knowledge_base directory. Place .txt, .md, .docx, or .pdf files there.")
+            logger.info("No existing vector store found. Performing full indexing...")
+            processed_files, chunks_count = document_indexer.ingest_knowledge_base(force_rebuild=False)
+            if chunks_count > 0:
+                logger.info(f"✓ Knowledge base indexed successfully: {chunks_count} chunks from {len(processed_files)} files")
+            else:
+                logger.warning("⚠ No documents found in knowledge_base directory. Place .txt, .md, .docx, or .pdf files there.")
     except Exception as e:
         logger.error(f"✗ Failed to index knowledge base: {e}")
 

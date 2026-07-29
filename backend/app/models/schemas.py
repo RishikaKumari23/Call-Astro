@@ -12,7 +12,6 @@ class ChatResponse(BaseModel):
     birth_time: Optional[str] = None
     birth_place: Optional[str] = None
     language: str
-    suggestions: List[str] = []
 
 class SessionInfoResponse(BaseModel):
     session_id: str
@@ -21,6 +20,8 @@ class SessionInfoResponse(BaseModel):
     birth_place: Optional[str] = None
     name: Optional[str] = None
     gender: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     language: str
     updated_at: str
 

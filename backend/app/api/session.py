@@ -1,44 +1,135 @@
+import json
 from fastapi import APIRouter, HTTPException
-from backend.app.models.schemas import SessionInfoResponse
-from backend.app.memory.database import db
-from backend.app.utils.logger import logger
-from datetime import datetime
+from app.models.schemas import SessionInfoResponse
+from app.memory.database import db
+from app.services.geocoding_service import geocoding_service
+from app.services.dashboard_service import get_lucky_color, generate_daily_prediction
+from app.utils.logger import logger
+from datetime import date
 
 router = APIRouter(prefix="/session", tags=["Session"])
 
 @router.get("/{session_id}", response_model=SessionInfoResponse)
 async def get_session_info(session_id: str):
-    """Retrieve full astrological profile data for a session."""
     try:
         session = db.get_or_create_session(session_id)
         return SessionInfoResponse(
-            session_id=session["session_id"],
-            dob=session.get("dob"),
-            birth_time=session.get("birth_time"),
-            birth_place=session.get("birth_place"),
-            gender=session.get("gender"),
-            name=session.get("name"),
-            language=session.get("language", "Hinglish"),
-            updated_at=session.get("updated_at")
+            session_id=session["session_id"], dob=session.get("dob"),
+            birth_time=session.get("birth_time"), birth_place=session.get("birth_place"),
+            gender=session.get("gender"), name=session.get("name"),
+            latitude=session.get("latitude"), longitude=session.get("longitude"),
+            language=session.get("language", "Hinglish"), updated_at=session.get("updated_at")
         )
     except Exception as e:
         logger.error(f"Error fetching session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/{session_id}/kundli-chart")
+async def get_kundli_chart(session_id: str):
+    try:
+        session = db.get_or_create_session(session_id)
+        raw = session.get("kundli_raw")
+        if not raw:
+            return {"available": False, "planets": [], "ascendant_sign": None}
+        parsed = json.loads(raw)
+        return {"available": True, "planets": parsed.get("planets", []), "ascendant_sign": parsed.get("ascendant_sign")}
+    except Exception as e:
+        logger.error(f"Error fetching kundli chart: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{session_id}/dashboard")
+async def get_dashboard(session_id: str):
+    try:
+        session = db.get_or_create_session(session_id)
+        today_str = date.today().isoformat()
+
+        # Serve from cache only if it was a real successful generation
+        if session.get("dashboard_date") == today_str and session.get("dashboard_prediction"):
+            return {
+                "available": True,
+                "prediction": session.get("dashboard_prediction"),
+                "lucky_color": session.get("dashboard_lucky_color"),
+            }
+
+        kundli_summary = session.get("kundli_data")
+        kundli_raw = session.get("kundli_raw")
+        if not kundli_summary:
+            return {"available": False, "prediction": None, "lucky_color": None}
+
+        moon_sign = None
+        if kundli_raw:
+            parsed = json.loads(kundli_raw)
+            for p in parsed.get("planets", []):
+                if p.get("name") == "Moon":
+                    moon_sign = p.get("sign_name")
+                    break
+
+        lucky_color = get_lucky_color(moon_sign)
+        prediction = generate_daily_prediction(kundli_summary, session.get("language", "Hinglish"))
+
+        if prediction is None:
+            # Generation failed — return a fallback to the user for THIS request only,
+            # but do NOT cache it, so the next request tries generating fresh again
+            logger.warning(f"Dashboard prediction generation failed for session {session_id} — not caching")
+            return {
+                "available": True,
+                "prediction": "Aaj ka din shant man se guzariye. 🌟",
+                "lucky_color": lucky_color,
+            }
+
+        # Only cache on genuine success
+        db.update_session(session_id, {
+            "dashboard_prediction": prediction,
+            "dashboard_lucky_color": lucky_color,
+            "dashboard_date": today_str,
+        })
+        return {"available": True, "prediction": prediction, "lucky_color": lucky_color}
+    except Exception as e:
+        logger.error(f"Error generating dashboard: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{session_id}/recalculate-kundli")
+async def recalculate_kundli(session_id: str):
+    """Force a fresh Kundli fetch — used right after editing birth details."""
+    from app.services.chat_service import chat_service
+    try:
+        session = db.get_or_create_session(session_id)
+        kundli_str = chat_service._fetch_and_cache_kundli(session_id, session)
+        return {"success": kundli_str != "No chart data available."}
+    except Exception as e:
+        logger.error(f"Error recalculating kundli: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/{session_id}", response_model=SessionInfoResponse)
 async def update_session_info(session_id: str, profile_update: dict):
-    """Update profile information fields manually."""
     try:
+        birth_fields_changed = any(k in profile_update for k in ("dob", "birth_time", "birth_place"))
+
+        if profile_update.get("birth_place"):
+            coords = geocoding_service.geocode(profile_update["birth_place"])
+            if coords:
+                profile_update["latitude"], profile_update["longitude"] = coords
+            else:
+                logger.warning(f"Could not geocode birth_place: {profile_update['birth_place']}")
+
+        if birth_fields_changed:
+            profile_update["kundli_data"] = None
+            profile_update["kundli_raw"] = None
+            profile_update["dashboard_prediction"] = None
+            profile_update["dashboard_date"] = None
+            logger.info(f"Birth details changed for {session_id} — cleared cached Kundli/dashboard data")
+
         updated = db.update_session(session_id, profile_update)
+
+        if birth_fields_changed:
+            db.add_message(session_id, "system", "📝 Birth details updated — your chart has been recalculated.")
+
         return SessionInfoResponse(
-            session_id=updated["session_id"],
-            dob=updated.get("dob"),
-            birth_time=updated.get("birth_time"),
-            birth_place=updated.get("birth_place"),
-            gender=updated.get("gender"),
-            name=updated.get("name"),
-            language=updated.get("language", "Hinglish"),
-            updated_at=updated.get("updated_at")
+            session_id=updated["session_id"], dob=updated.get("dob"),
+            birth_time=updated.get("birth_time"), birth_place=updated.get("birth_place"),
+            gender=updated.get("gender"), name=updated.get("name"),
+            latitude=updated.get("latitude"), longitude=updated.get("longitude"),
+            language=updated.get("language", "Hinglish"), updated_at=updated.get("updated_at")
         )
     except Exception as e:
         logger.error(f"Error updating session info: {e}")
@@ -46,14 +137,12 @@ async def update_session_info(session_id: str, profile_update: dict):
 
 @router.delete("/{session_id}")
 async def clear_session(session_id: str):
-    """Reset chat history and delete the profile configuration for a session."""
     try:
         with db._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
             cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             conn.commit()
-        logger.info(f"Cleared session {session_id} from database.")
         return {"status": "success", "message": f"Session {session_id} has been cleared."}
     except Exception as e:
         logger.error(f"Error clearing session: {e}")

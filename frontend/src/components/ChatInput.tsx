@@ -4,11 +4,28 @@ import { Send } from 'lucide-react';
 interface ChatInputProps {
   onSendMessage: (message: string) => void;
   disabled: boolean;
+  language: string;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled }) => {
+const STRINGS: Record<string, { placeholder: string; footerNote: string }> = {
+  English: {
+    placeholder: 'Ask about marriage, career, finance, planets...',
+    footerNote: 'Vedic astrology readings are context-guided. Provide accurate DOB, Time, and Place for correct charts.',
+  },
+  Hindi: {
+    placeholder: 'शादी, करियर, वित्त, ग्रहों के बारे में पूछें...',
+    footerNote: 'वैदिक ज्योतिष पठन संदर्भ-आधारित हैं। सही चार्ट के लिए सटीक जन्म तिथि, समय और स्थान दें।',
+  },
+  Hinglish: {
+    placeholder: 'Shaadi, career, finance, planets ke baare mein puchiye...',
+    footerNote: 'Vedic astrology readings context-guided hain. Sahi chart ke liye accurate DOB, Time, aur Place dein.',
+  },
+};
+
+export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled, language }) => {
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const t = STRINGS[language] || STRINGS.Hinglish;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,7 +34,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled })
     setInput('');
   };
 
-  // Handle Enter (send) and Shift+Enter (new line)
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -25,7 +41,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled })
     }
   };
 
-  // Auto-resize input height based on text lines
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -41,7 +56,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled })
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask about marriage, career, finance, planets..."
+          placeholder={t.placeholder}
           rows={1}
           disabled={disabled}
           className="flex-1 resize-none bg-transparent outline-none max-h-32 text-sm py-2 px-3 text-slate-800 placeholder-slate-400 disabled:opacity-50"
@@ -55,7 +70,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled })
         </button>
       </div>
       <p className="max-w-2xl mx-auto text-center text-[10px] text-slate-400 mt-2">
-        Vedic astrology readings are context-guided. Provide accurate DOB, Time, and Place for correct charts.
+        {t.footerNote}
       </p>
     </form>
   );

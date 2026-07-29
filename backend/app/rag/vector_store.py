@@ -3,8 +3,8 @@ import json
 import pickle
 import numpy as np
 from typing import List, Dict, Tuple, Optional
-from backend.app.config.settings import settings
-from backend.app.utils.logger import logger
+from app.config.settings import settings
+from app.utils.logger import logger
 
 class LocalVectorStore:
     def __init__(self, data_dir: str = settings.VECTOR_DB_DIR):

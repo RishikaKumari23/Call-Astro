@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
-from backend.app.models.schemas import StatusResponse
-from backend.app.rag.vector_store import vector_store
-from backend.app.utils.logger import logger
+from app.models.schemas import StatusResponse
+from app.rag.vector_store import vector_store
+from app.utils.logger import logger
 
 router = APIRouter(prefix="/ingest", tags=["Ingestion"])
 

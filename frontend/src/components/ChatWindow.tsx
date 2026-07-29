@@ -1,73 +1,73 @@
 import React, { useEffect, useRef } from 'react';
 import { User } from 'lucide-react';
-import { SuggestionChips } from './SuggestionChips';
 
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp?: string;
-}
+interface Message { role: 'user' | 'assistant' | 'system'; content: string; timestamp?: string; }
+interface ChatWindowProps { messages: Message[]; isTyping: boolean; language: string; }
 
-interface ChatWindowProps {
-  messages: Message[];
-  isTyping: boolean;
-  suggestions: string[];
-  onSuggestionSelect: (text: string) => void;
-}
+const GREETINGS: Record<string, string> = {
+  English: '🙏 Namaste! How may I assist you today?',
+  Hindi: '🙏 नमस्ते! मैं आपकी क्या सेवा कर सकता हूँ?',
+  Hinglish: '🙏 Namaste! Main aapki kya seva kar sakta hoon?',
+};
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, suggestions, onSuggestionSelect }) => {
+const TypingDots = () => (
+  <span className="flex items-center gap-1">
+    <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+    <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+    <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+  </span>
+);
+
+export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, language }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const greeting = GREETINGS[language] || GREETINGS.Hinglish;
 
-  // Scroll to bottom whenever messages or typing state changes
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
-      {/* Greeting message if no history */}
       {messages.length === 0 && (
         <div className="flex justify-start max-w-2xl mx-auto">
           <div className="flex gap-4">
-            <div className="w-9 h-9 rounded-full bg-amber-500 flex items-center justify-center text-white text-base shadow-sm shrink-0">
-              🔮
-            </div>
+            <div className="w-9 h-9 rounded-full bg-amber-500 flex items-center justify-center text-white text-base shadow-sm shrink-0">🔮</div>
             <div className="bg-white border border-slate-200 text-slate-800 rounded-2xl px-5 py-3.5 shadow-sm leading-relaxed">
-              🙏 Namaste! Main aapki kya seva kar sakta hoon?
+              {greeting}
             </div>
           </div>
         </div>
       )}
 
-      {/* Render messages */}
       <div className="max-w-2xl mx-auto space-y-6">
         {messages.map((msg, index) => {
+          if (msg.role === 'system') {
+            return (
+              <div key={index} className="flex justify-center my-2">
+                <div className="bg-slate-100 text-slate-500 text-xs px-4 py-1.5 rounded-full">{msg.content}</div>
+              </div>
+            );
+          }
+
           const isUser = msg.role === 'user';
+          const isLastMessage = index === messages.length - 1;
+          const isEmptyAssistantPlaceholder = !isUser && msg.content === '' && isLastMessage;
+
           return (
-            <div
-              key={index}
-              className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
-            >
+            <div key={index} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
               <div className={`flex gap-3 max-w-[85%] ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-                {/* Avatar */}
-                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm shadow-sm shrink-0 ${
-                  isUser 
-                    ? 'bg-slate-200 text-slate-600' 
-                    : 'bg-amber-500 text-white'
-                }`}>
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm shadow-sm shrink-0 ${isUser ? 'bg-slate-200 text-slate-600' : 'bg-amber-500 text-white'}`}>
                   {isUser ? <User size={16} /> : '🔮'}
                 </div>
-
-                {/* Message Bubble */}
                 <div>
-                  <div className={`rounded-2xl px-5 py-3.5 shadow-sm leading-relaxed ${
-                    isUser
-                      ? 'bg-slate-900 text-white rounded-tr-none'
-                      : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none'
-                  }`}>
-                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  <div className={`rounded-2xl px-5 py-3.5 shadow-sm leading-relaxed ${isUser ? 'bg-slate-900 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none'}`}>
+                    {isEmptyAssistantPlaceholder ? (
+                      <TypingDots />
+                    ) : (
+                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                    )}
                   </div>
-                  {msg.timestamp && (
+                  {msg.timestamp && !isEmptyAssistantPlaceholder && (
                     <div className={`text-[10px] text-slate-400 mt-1 px-1 ${isUser ? 'text-right' : 'text-left'}`}>
                       {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </div>
@@ -77,31 +77,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, sugg
             </div>
           );
         })}
-
-        {/* Follow-up suggestion chips */}
-        {!isTyping && suggestions.length > 0 && (
-          <SuggestionChips
-            suggestions={suggestions}
-            onSelect={onSuggestionSelect}
-            disabled={isTyping}
-          />
-        )}
-
-        {/* Typing indicator */}
-        {isTyping && (
-          <div className="flex justify-start">
-            <div className="flex gap-3">
-              <div className="w-9 h-9 rounded-full bg-amber-500 flex items-center justify-center text-white text-sm shadow-sm shrink-0">
-                🔮
-              </div>
-              <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-none px-5 py-4 shadow-sm flex items-center gap-1">
-                <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-              </div>
-            </div>
-          </div>
-        )}
         <div ref={bottomRef} />
       </div>
     </div>
