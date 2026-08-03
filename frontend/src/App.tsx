@@ -225,7 +225,7 @@ function App() {
           <div className="flex items-center gap-2.5">
             <div className="p-2 bg-amber-500 text-white rounded-xl shadow-sm"><Sparkles size={20} /></div>
             <div>
-              <h1 className="text-lg font-bold text-slate-800 leading-none">AstroTalk</h1>
+              <h1 className="text-lg font-bold text-slate-800 leading-none">Call-Astro</h1>
               <p className="text-[10px] text-slate-400 font-medium mt-0.5">{greeting || 'Your Dashboard'}</p>
             </div>
           </div>
@@ -299,7 +299,7 @@ function App() {
         </button>
         <div className="flex items-center gap-2.5">
           <div className="p-2 bg-amber-500 text-white rounded-xl shadow-sm"><Sparkles size={20} /></div>
-          <h1 className="text-lg font-bold text-slate-800 leading-none">AstroTalk</h1>
+          <h1 className="text-lg font-bold text-slate-800 leading-none">Call-Astro</h1>
         </div>
         <div className="hidden sm:flex items-center gap-2">
           {ingestStatus.indexing_completed ? (
