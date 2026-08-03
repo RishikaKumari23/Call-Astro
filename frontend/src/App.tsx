@@ -9,6 +9,7 @@ import KundliChartToggle from './components/KundliChartToggle';
 import LifeDashboard from './components/LifeDashboard';
 import EditDetailsModal from './components/EditDetailsModal';
 import GoToChatCard from './components/GoToChatCard';
+import WeeklyGuidance from './components/WeeklyGuidance';
 
 interface Message { role: 'user' | 'assistant' | 'system'; content: string; timestamp?: string; }
 interface IngestStatus { indexing_completed: boolean; total_chunks: number; loading: boolean; }
@@ -326,6 +327,10 @@ function App() {
           <QuickTopics onSelect={handleSendMessage} disabled={isTyping} language={language} />
           <ChatInput onSendMessage={handleSendMessage} disabled={isTyping} language={language} />
         </main>
+        <aside className="hidden lg:block w-72 border-l border-slate-200 bg-slate-50 p-4 overflow-y-auto shrink-0">
+         <WeeklyGuidance sessionId={sessionId} />
+        </aside>
+
       </div>
     </div>
   );

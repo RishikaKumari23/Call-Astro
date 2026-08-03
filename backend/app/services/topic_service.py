@@ -39,7 +39,45 @@ ZODIAC_SIGNS = [
     "Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
     "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"
 ]
-
+TOPIC_RELEVANT_BOOKS = {
+    "career": [
+        "Jyotish_AIFAS_Timing of events through Dasha and transit",
+        "Timing of Events through Dasha and Transit",
+        "Dasa Lord Transit _PVR Rao (1)",
+        "Dasha-Transit (1)",
+        "J_KP reader_5_transits",
+        "Important Planetary Transits",
+        "Gochar Vichar AIFAS (1)",
+    ],
+    "marriage": [
+        "Timing of Marriage by Transits and Jaimini Astrology (2)",
+        "Timing marriage",
+        "Jupiter_Transits_paryaya",  # from Jyotish_2015_Parthasarathy_Vinukonda_Jupiter_Transits_paryaya
+    ],
+    "health": [
+        "Cancer timing Through Transits_S.Rath (1)",
+    ],
+    "finance": [
+        "Dasa Lord Transit _PVR Rao (1)",
+        "Transit Conjunctions on Natal Points_PVR Rao (2)",
+    ],
+    "education": [
+        "Jyotish_AIFAS_Timing of events through Dasha and transit",
+        "Stars_Days_&_Transit_In_Vedic_Astrology",  # from Jyotish_2017_S_P_Bhagat
+    ],
+    "timing_general": [
+        "Transit short cuts",
+        "Transit Short-Cuts_A Practical Tool_Bepin Behari (2)",
+        "Importance of TRANSIT Astrology",
+        "Microscopy_of_Transiting_Planets",  # matches all 4 Baldev_Bhatia volumes
+        "Celestial_Transits_Or_Grah_Gochar",  # Jyotish_2024_Madhusudan_Dusi
+        "Transit of Nakshatra Dasa Lord",
+        "Transit of Rahu-Ketu & the Fortunes",
+        "Saturn transit in Square houses",
+        "Stationary Planets in Transit",
+        "Tertiary Progression And Trigger Transits",
+    ],
+}
 
 def classify_topic(message: str) -> Optional[str]:
     """Simple keyword-based topic classifier."""

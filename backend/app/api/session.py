@@ -3,9 +3,10 @@ from fastapi import APIRouter, HTTPException
 from app.models.schemas import SessionInfoResponse
 from app.memory.database import db
 from app.services.geocoding_service import geocoding_service
-from app.services.dashboard_service import get_lucky_color, generate_daily_prediction
 from app.utils.logger import logger
-from datetime import date
+from datetime import date, timedelta
+from app.services.dashboard_service import get_lucky_color, generate_daily_prediction, generate_weekly_guidance
+
 
 router = APIRouter(prefix="/session", tags=["Session"])
 
@@ -147,3 +148,43 @@ async def clear_session(session_id: str):
     except Exception as e:
         logger.error(f"Error clearing session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+    
+
+@router.get("/{session_id}/weekly-guidance")
+async def get_weekly_guidance(session_id: str):
+    try:
+        session = db.get_or_create_session(session_id)
+        today = date.today()
+        # ISO week identifier so it regenerates once per calendar week, not per day
+        week_id = today.strftime("%Y-W%W")
+
+        if session.get("weekly_week_start") == week_id and session.get("weekly_guidance"):
+            return {"available": True, "guidance": session.get("weekly_guidance")}
+
+        kundli_summary = session.get("kundli_data")
+        if not kundli_summary:
+            return {"available": False, "guidance": None}
+
+        dasha_summary = ""
+        cached_dasha = session.get("kundli_dasha")
+        if cached_dasha:
+            dasha_data = json.loads(cached_dasha)
+            maha = dasha_data.get("current_mahadasha", {})
+            antar = dasha_data.get("current_antardasha", {})
+            if maha:
+                dasha_summary = f"Mahadasha: {maha.get('lord')}"
+                if antar:
+                    dasha_summary += f", Antardasha: {antar.get('lord')}"
+
+        guidance = generate_weekly_guidance(kundli_summary, dasha_summary, session.get("language", "Hinglish"))
+
+        if guidance is None:
+            logger.warning(f"Weekly guidance generation failed for session {session_id} — not caching")
+            return {"available": True, "guidance": "Yeh hafta dhairya aur focus ke saath guzariye. 🌟"}
+
+        db.update_session(session_id, {"weekly_guidance": guidance, "weekly_week_start": week_id})
+        return {"available": True, "guidance": guidance}
+    except Exception as e:
+        logger.error(f"Error generating weekly guidance: {e}")
+        raise HTTPException(status_code=500, detail=str(e))    
