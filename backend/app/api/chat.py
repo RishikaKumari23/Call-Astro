@@ -76,3 +76,13 @@ async def get_chat_history(session_id: str):
     except Exception as e:
         logger.error(f"Error retrieving chat history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/history/{session_id}")
+async def clear_chat_history(session_id: str):
+    """Clear chat history for a session."""
+    try:
+        db.clear_history(session_id)
+        return {"status": "success", "message": "Chat history cleared"}
+    except Exception as e:
+        logger.error(f"Error clearing chat history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

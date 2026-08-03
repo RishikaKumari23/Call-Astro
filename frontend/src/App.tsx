@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ChatWindow } from './components/ChatWindow';
 import { ChatInput } from './components/ChatInput';
 import { ProfileCard } from './components/ProfileCard';
-import { Sparkles, Database, CheckCircle, ArrowLeft } from 'lucide-react';
+import { Sparkles, Database, CheckCircle, ArrowLeft, Download, Trash2 } from 'lucide-react';
 import OnboardingForm from './components/OnboardingForm';
 import QuickTopics from './components/QuickTopics';
 import KundliChartToggle from './components/KundliChartToggle';
@@ -223,6 +223,39 @@ function App() {
     return <OnboardingForm sessionId={sessionId} onComplete={handleOnboardingComplete} />;
   }
 
+  const exportChat = () => {
+    if (messages.length === 0) return;
+    const textData = messages.map(msg => {
+      const role = msg.role === 'user' ? 'You' : 'Astrologer';
+      return `[${msg.timestamp || new Date().toISOString()}] ${role}:\n${msg.content}\n`;
+    }).join('\n');
+    const blob = new Blob([textData], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Call-Astro_Chat_Export.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const clearChat = async () => {
+    if (!confirm('Are you sure you want to clear your chat history?')) return;
+    try {
+      const res = await fetch(`${API_BASE}/chat/history/${sessionId}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        setMessages([]);
+      } else {
+        setError('Failed to clear chat history');
+      }
+    } catch (err) {
+      setError('Network error clearing chat history');
+    }
+  };
+
   if (view === 'dashboard') {
     const greetingFn = GREETINGS[language] || GREETINGS.Hinglish;
     const greeting = name ? greetingFn(name) : '';
@@ -310,16 +343,24 @@ function App() {
           <div className="p-2 bg-amber-500 text-white rounded-xl shadow-sm"><Sparkles size={20} /></div>
           <h1 className="text-lg font-bold text-slate-800 leading-none">Call-Astro</h1>
         </div>
-        <div className="hidden sm:flex items-center gap-2">
-          {ingestStatus.indexing_completed ? (
-            <div className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full text-xs font-medium border border-emerald-100">
-              <CheckCircle size={12} /><span>RAG Active: {ingestStatus.total_chunks} Chunks</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1 text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full text-xs font-medium border border-slate-200">
-              <Database size={12} /><span>RAG: Initializing</span>
-            </div>
-          )}
+        <div className="flex items-center gap-2">
+          <button onClick={exportChat} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition" title="Export Chat">
+            <Download size={18} />
+          </button>
+          <button onClick={clearChat} className="p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Clear Chat">
+            <Trash2 size={18} />
+          </button>
+          <div className="hidden sm:flex items-center gap-2 border-l border-slate-200 pl-2 ml-1">
+            {ingestStatus.indexing_completed ? (
+              <div className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full text-xs font-medium border border-emerald-100">
+                <CheckCircle size={12} /><span>RAG Active: {ingestStatus.total_chunks} Chunks</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full text-xs font-medium border border-slate-200">
+                <Database size={12} /><span>RAG: Initializing</span>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 

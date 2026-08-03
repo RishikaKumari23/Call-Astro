@@ -168,4 +168,12 @@ class MemoryDatabase:
             rows = cursor.fetchall()
             return [dict(row) for row in rows][-limit:]
 
+    def clear_history(self, session_id: str):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            cursor.execute("UPDATE sessions SET topic_memory = NULL, updated_at = ? WHERE session_id = ?", 
+                           (datetime.utcnow().isoformat(), session_id))
+            conn.commit()
+
 db = MemoryDatabase()
