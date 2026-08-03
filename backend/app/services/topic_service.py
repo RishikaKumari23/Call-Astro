@@ -78,6 +78,11 @@ TOPIC_RELEVANT_BOOKS = {
         "Tertiary Progression And Trigger Transits",
     ],
 }
+NATURAL_BENEFICS = {"Jupiter", "Venus", "Mercury", "Moon"}
+NATURAL_MALEFICS = {"Saturn", "Mars", "Rahu", "Ketu", "Sun"}
+
+KENDRA_TRIKONA_HOUSES = {1, 4, 5, 7, 9, 10, 11}   # strong/supportive houses
+DUSTHANA_HOUSES = {6, 8, 12}                       # weak/challenging houses
 
 def classify_topic(message: str) -> Optional[str]:
     """Simple keyword-based topic classifier."""
@@ -208,3 +213,113 @@ def build_explanation_footer(topic: Optional[str], ascendant_sign: Optional[str]
         "Hinglish": f"\n\n📍 Based on: {factors_str}",
     }
     return labels.get(language, labels["Hinglish"])
+
+
+
+def _score_dasha_signal(dasha_info: Optional[dict]) -> int:
+    """+1 if current Dasha lord(s) are naturally benefic, -1 if malefic, 0 if mixed/unknown."""
+    if not dasha_info:
+        return 0
+    maha_lord = dasha_info.get("current_mahadasha", {}).get("lord")
+    antar_lord = dasha_info.get("current_antardasha", {}).get("lord")
+
+    score = 0
+    for lord in [maha_lord, antar_lord]:
+        if not lord:
+            continue
+        if lord in NATURAL_BENEFICS:
+            score += 1
+        elif lord in NATURAL_MALEFICS:
+            score -= 1
+    # Clamp to -1/0/+1 so Mahadasha+Antardasha don't just double-count the same direction
+    return (score > 0) - (score < 0)
+
+
+def _score_chart_signal(topic: str, planets: List[dict], ascendant_sign: str) -> int:
+    """+1 if topic's house lord / significators are well-placed, -1 if in dusthana or retrograde, 0 if mixed."""
+    config = TOPIC_CHART_FACTORS.get(topic)
+    if not config:
+        return 0
+
+    house_num = config["house"]
+    house_lord_name = get_house_lord(house_num, ascendant_sign)
+
+    score = 0
+    checked = 0
+
+    candidates = [house_lord_name] + config["planets"]
+    seen = set()
+    for planet_name in candidates:
+        if not planet_name or planet_name in seen:
+            continue
+        seen.add(planet_name)
+        match = next((p for p in planets if p.get("name") == planet_name), None)
+        if not match:
+            continue
+
+        sign = match.get("sign_name", "")
+        placed_house = get_house_for_sign(sign, ascendant_sign)
+        is_retro = str(match.get("isRetro", "")).lower() == "true"
+
+        checked += 1
+        if placed_house in DUSTHANA_HOUSES or is_retro:
+            score -= 1
+        elif placed_house in KENDRA_TRIKONA_HOUSES:
+            score += 1
+
+    if checked == 0:
+        return 0
+    return (score > 0) - (score < 0)
+
+
+def build_consistency_check(topic: Optional[str], planets: List[dict], ascendant_sign: Optional[str],
+                             dasha_info: Optional[dict]) -> Optional[dict]:
+    """Compare Dasha timing vs. chart placement for this topic. Returns None
+    if there isn't enough data to check (no topic, no chart, etc.)."""
+    if not topic or not planets or not ascendant_sign:
+        return None
+
+    dasha_score = _score_dasha_signal(dasha_info)
+    chart_score = _score_chart_signal(topic, planets, ascendant_sign)
+
+    if dasha_score == 0 and chart_score == 0:
+        return None  # not enough signal either way to say anything meaningful
+
+    if dasha_score > 0 and chart_score > 0:
+        alignment = "aligned_positive"
+    elif dasha_score < 0 and chart_score < 0:
+        alignment = "aligned_negative"
+    elif (dasha_score > 0 and chart_score < 0) or (dasha_score < 0 and chart_score > 0):
+        alignment = "mixed"
+    else:
+        alignment = "leaning"  # one signal neutral, other has a direction
+
+    return {
+        "alignment": alignment,
+        "dasha_score": dasha_score,
+        "chart_score": chart_score,
+    }
+
+
+def build_consistency_note(check: Optional[dict], topic: Optional[str]) -> str:
+    """Turn the consistency check result into an explicit instruction block
+    for the LLM prompt — this is what actually changes the model's behavior."""
+    if not check or not topic:
+        return ""
+
+    alignment = check["alignment"]
+
+    if alignment == "aligned_positive":
+        return (f"Signal check for {topic}: Dasha timing AND chart placement both point favorably. "
+                f"You may speak with full confidence — the signals agree.")
+    if alignment == "aligned_negative":
+        return (f"Signal check for {topic}: Dasha timing AND chart placement both indicate challenges. "
+                f"Speak honestly about the difficulty, still with a constructive/encouraging tone — don't manufacture false optimism.")
+    if alignment == "mixed":
+        return (f"Signal check for {topic}: Dasha timing and chart placement point in DIFFERENT directions "
+                f"(one supportive, one challenging). Do NOT force a single confident verdict — acknowledge both "
+                f"sides honestly in your own natural voice, e.g. 'is supported by X but a bit delayed by Y'. "
+                f"This is genuine nuance in the chart, not uncertainty on your part.")
+    # "leaning"
+    return (f"Signal check for {topic}: One signal (Dasha or chart) leans positive/negative, the other is neutral. "
+            f"You may lean toward that direction but keep slightly softer certainty than a fully aligned reading.")

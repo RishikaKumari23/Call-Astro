@@ -301,6 +301,9 @@ class ChatService:
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text)
 
             user_memory = ""
+            consistency_note = ""
+            if is_astrology and not missing_fields:
+                consistency_note = self._get_consistency_note(session, topic)
             if is_astrology and not missing_fields:
                 user_memory = self._get_user_memory_block(session, topic)
 
@@ -311,6 +314,7 @@ class ChatService:
                     birth_place=session.get("birth_place") or "Not provided",
                     context=context_str or "No book context.", kundli_data=final_kundli_data,
                     user_memory=user_memory or "No prior topics discussed yet.",
+                    consistency_note=consistency_note or "No specific conflict detected.",
                     history=history_text, query=message_text
                 )
                 response_text = llm_service.generate(prompt=astrologer_prompt, temperature=0.6)
@@ -457,6 +461,29 @@ class ChatService:
             yield {"type": "chunk", "text": fallback}
             yield {"type": "done", "session_id": session_id, "message": fallback,
                    "dob": None, "birth_time": None, "birth_place": None, "language": "Hinglish"}
+    
+    
+    def _get_consistency_note(self, session: Dict, topic: Optional[str]) -> str:
+        """Build the Dasha-vs-chart consistency check and return the
+        instruction text to inject into the prompt."""
+        if not topic:
+            return ""
+        try:
+            cached_raw = session.get("kundli_raw")
+            cached_dasha = session.get("kundli_dasha")
+            if not cached_raw:
+                return ""
 
+            parsed = json.loads(cached_raw)
+            planets = parsed.get("planets", [])
+            ascendant_sign = parsed.get("ascendant_sign")
+            dasha_info = json.loads(cached_dasha) if cached_dasha else None
+
+            from app.services.topic_service import build_consistency_check, build_consistency_note
+            check = build_consistency_check(topic, planets, ascendant_sign, dasha_info)
+            return build_consistency_note(check, topic)
+        except Exception as e:
+            logger.error(f"Consistency check failed: {e}")
+            return ""
 
 chat_service = ChatService()
