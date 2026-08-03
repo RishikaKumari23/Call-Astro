@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { User } from 'lucide-react';
 
 interface Message { role: 'user' | 'assistant' | 'system'; content: string; timestamp?: string; }
-interface ChatWindowProps { messages: Message[]; isTyping: boolean; language: string; }
+interface ChatWindowProps { messages: Message[]; isTyping: boolean; language: string; suggestions: string[]; onSuggestionSelect: (q: string) => void; }
 
 const GREETINGS: Record<string, string> = {
   English: '🙏 Namaste! How may I assist you today?',
@@ -18,7 +18,7 @@ const TypingDots = () => (
   </span>
 );
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, language }) => {
+export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, language, suggestions, onSuggestionSelect }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
   const greeting = GREETINGS[language] || GREETINGS.Hinglish;
 
@@ -77,6 +77,20 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, lang
             </div>
           );
         })}
+        {/* Follow-up suggestion chips after last bot message */}
+        {!isTyping && suggestions.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-2 max-w-2xl mx-auto pl-12">
+            {suggestions.map((s, i) => (
+              <button
+                key={i}
+                onClick={() => onSuggestionSelect(s)}
+                className="px-3 py-1.5 rounded-full text-xs bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-500 hover:text-white hover:border-amber-500 transition-all"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
     </div>

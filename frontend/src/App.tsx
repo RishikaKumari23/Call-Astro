@@ -10,6 +10,7 @@ import LifeDashboard from './components/LifeDashboard';
 import EditDetailsModal from './components/EditDetailsModal';
 import GoToChatCard from './components/GoToChatCard';
 import WeeklyGuidance from './components/WeeklyGuidance';
+import FaqStarter from './components/FaqStarter';
 
 interface Message { role: 'user' | 'assistant' | 'system'; content: string; timestamp?: string; }
 interface IngestStatus { indexing_completed: boolean; total_chunks: number; loading: boolean; }
@@ -38,6 +39,7 @@ function App() {
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [isResetting, setIsResetting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [kundliPlanets, setKundliPlanets] = useState<any[] | null>(null);
   const [ascendantSign, setAscendantSign] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -114,6 +116,7 @@ function App() {
     setMessages(prev => [...prev, userMsg]);
     setIsTyping(true);
     setError(null);
+    setSuggestions([]);
 
     let assistantIndex = -1;
     setMessages(prev => {
@@ -159,6 +162,9 @@ function App() {
             setBirthTime(event.birth_time);
             setBirthPlace(event.birth_place);
             setLanguage(event.language);
+            if (event.suggestions && Array.isArray(event.suggestions)) {
+              setSuggestions(event.suggestions);
+            }
           }
         }
       }
@@ -323,8 +329,8 @@ function App() {
 
       <div className="flex-1 flex overflow-hidden">
         <main className="flex-1 flex flex-col min-w-0 bg-slate-50">
-          <ChatWindow messages={messages} isTyping={isTyping} language={language} />
-          <QuickTopics onSelect={handleSendMessage} disabled={isTyping} language={language} />
+          <ChatWindow messages={messages} isTyping={isTyping} language={language} suggestions={suggestions} onSuggestionSelect={handleSendMessage} />
+          <FaqStarter onSelect={handleSendMessage} disabled={isTyping} language={language} />
           <ChatInput onSendMessage={handleSendMessage} disabled={isTyping} language={language} />
         </main>
         <aside className="hidden lg:block w-72 border-l border-slate-200 bg-slate-50 p-4 overflow-y-auto shrink-0">
