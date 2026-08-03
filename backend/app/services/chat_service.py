@@ -24,7 +24,7 @@ class ChatService:
         formatted = []
         for msg in history:
             if msg["role"] == "system":
-                continue  # don't feed system divider messages into the LLM prompt
+                continue
             role_name = "User" if msg["role"] == "user" else "Astrologer"
             formatted.append(f"{role_name}: {msg['content']}")
         return "\n".join(formatted)
@@ -44,9 +44,6 @@ class ChatService:
                 return time_str
 
     def _fetch_and_cache_kundli(self, session_id: str, session: Dict) -> str:
-        """Fetch Kundli data once, cache the text summary (for the LLM prompt),
-        structured chart data (for the frontend chart), and dasha info (for
-        the explainability footer) — all on the session."""
         try:
             coords = geocoding_service.geocode(session.get("birth_place"))
             if not coords:
@@ -61,44 +58,6 @@ class ChatService:
                 date=session.get("dob"), time=time_24h, latitude=lat, longitude=lon,
             )
             if kundli_data:
-                bundle = kundli_service.get_full_chart_bundle(kundli_data)
-                kundli_str = bundle["summary"]
-                chart_json = json.dumps(bundle["chart"]) if bundle["chart"] else None
-                dasha_json = json.dumps(bundle["dasha"]) if bundle["dasha"] else None
-                divisional_json = json.dumps(bundle["divisional"]) if bundle.get("divisional") else None
-
-                db.update_session(session_id, {
-                    "kundli_data": kundli_str,
-                    "kundli_raw": chart_json,
-                    "kundli_dasha": dasha_json,
-                    "kundli_divisional": divisional_json,
-                })
-                session["kundli_data"] = kundli_str
-                session["kundli_raw"] = chart_json
-                session["kundli_dasha"] = dasha_json
-                logger.info("Kundli data fetched and cached (summary + chart + dasha)")
-                return kundli_str
-        except Exception as kundli_err:
-            logger.error(f"Kundli fetch failed: {kundli_err}")
-
-        return "No chart data available."
-
-    def _fetch_and_cache_kundli(self, session_id: str, session: Dict) -> str:
-        try:
-            coords = geocoding_service.geocode(session.get("birth_place"))
-            if not coords:
-                logger.warning(f"Could not geocode birth_place: {session.get('birth_place')}")
-                return "No chart data available."
-
-            lat, lon = coords
-            time_24h = self._to_24h(session.get("birth_time", ""))
-
-            kundli_data = kundli_service.fetch_kundli(
-                name=session.get("name") or "User",
-                date=session.get("dob"), time=time_24h, latitude=lat, longitude=lon,
-            )
-            if kundli_data:
-                # Try real dasha API first, fall back to calculated version
                 dasha_info = kundli_service.get_real_or_calculated_dasha(
                     kundli_data, session.get("dob"), time_24h, lat, lon
                 )
@@ -124,7 +83,6 @@ class ChatService:
         return "No chart data available."
 
     def _get_rag_context(self, message_text: str, topic: Optional[str] = None) -> str:
-        """Shared RAG retrieval logic, with optional topic-biased search query."""
         try:
             search_query = message_text
             if topic:
@@ -149,8 +107,6 @@ class ChatService:
             return "No reference available."
 
     def _get_topic_emphasis(self, session: Dict, topic: Optional[str]) -> str:
-        """Build the topic-targeted chart-facts emphasis block, using the
-        cached structured chart data (kundli_raw)."""
         if not topic:
             return ""
         try:
@@ -167,11 +123,6 @@ class ChatService:
         return ""
 
     def _get_divisional_chart_text(self, session: Dict, topic: Optional[str]) -> str:
-        """If the topic has a relevant divisional chart (D9 for marriage,
-        D10 for career, etc.), fetch it and summarize. This data is already
-        present in every Kundli API response under chart_planet_positions —
-        just previously unused. Not cached separately (re-fetches the Lambda
-        once per topic switch within a session) to avoid a schema change."""
         if not topic:
             return ""
         config = TOPIC_CHART_FACTORS.get(topic, {})
@@ -200,9 +151,6 @@ class ChatService:
             return ""
 
     def _build_footer(self, session: Dict, topic: Optional[str], language: str) -> str:
-        """Build the honest, deterministic explainability footer from cached
-        chart + dasha data. Every item shown here is something we actually
-        fed the LLM — not an LLM self-report — so it's truthful by construction."""
         try:
             ascendant_sign = None
             cached_raw = session.get("kundli_raw")
@@ -221,10 +169,54 @@ class ChatService:
             return ""
 
     def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str) -> str:
-        """Combine base summary + topic emphasis + divisional chart into one
-        block for the prompt, skipping any empty parts cleanly."""
         parts = [p for p in [kundli_str, topic_emphasis, divisional_text] if p]
         return "\n\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # Session-scoped topic memory — lives on sessions.topic_memory, so it
+    # is automatically wiped the instant Reset Chat deletes the session row.
+    # ------------------------------------------------------------------
+    def _get_user_memory_block(self, session: Dict, current_topic: Optional[str]) -> str:
+        try:
+            raw = session.get("topic_memory")
+            if not raw:
+                return ""
+            memory = json.loads(raw)
+            if not memory:
+                return ""
+
+            lines = []
+            for topic, summary in memory.items():
+                if topic == current_topic:
+                    continue
+                lines.append(f"- {topic.capitalize()}: {summary}")
+
+            if not lines:
+                return ""
+            return "Earlier in this conversation, you already discussed:\n" + "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Failed to build user memory block: {e}")
+            return ""
+
+    def _update_topic_memory(self, session_id: str, session: Dict, topic: Optional[str], response_text: str):
+        if not topic or not response_text:
+            return
+        try:
+            raw = session.get("topic_memory")
+            memory = json.loads(raw) if raw else {}
+
+            truncated = response_text.strip().replace("\n", " ")
+            if len(truncated) > 150:
+                truncated = truncated[:150].rsplit(" ", 1)[0] + "..."
+
+            memory[topic] = truncated
+            memory_json = json.dumps(memory, ensure_ascii=False)
+
+            db.update_session(session_id, {"topic_memory": memory_json})
+            session["topic_memory"] = memory_json
+            logger.info(f"Updated topic_memory['{topic}']")
+        except Exception as e:
+            logger.error(f"Failed to update topic memory: {e}")
 
     # ------------------------------------------------------------------
     # NON-STREAMING — POST /api/chat
@@ -289,7 +281,6 @@ class ChatService:
                         "birth_place": session.get("birth_place"), "language": language
                     }
 
-            # Topic classification — drives RAG bias, chart emphasis, divisional chart, and footer
             topic = classify_topic(message_text) if (is_astrology and not missing_fields) else None
 
             context_str = ""
@@ -309,22 +300,29 @@ class ChatService:
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text)
 
+            user_memory = ""
+            if is_astrology and not missing_fields:
+                user_memory = self._get_user_memory_block(session, topic)
+
             try:
                 astrologer_prompt = ASTROLOGER_PROMPT.format(
                     language=language, dob=session.get("dob") or "Not provided",
                     birth_time=session.get("birth_time") or "Not provided",
                     birth_place=session.get("birth_place") or "Not provided",
                     context=context_str or "No book context.", kundli_data=final_kundli_data,
+                    user_memory=user_memory or "No prior topics discussed yet.",
                     history=history_text, query=message_text
                 )
                 response_text = llm_service.generate(prompt=astrologer_prompt, temperature=0.6)
-
-                
             except Exception as gen_err:
                 logger.error(f"Generation failed: {gen_err}")
                 response_text = "Mujhe samajhne mein kuch pareshani ho gayi."
 
             db.add_message(session_id, "assistant", response_text)
+
+            if is_astrology and not missing_fields:
+                self._update_topic_memory(session_id, session, topic, response_text)
+
             return {
                 "session_id": session_id, "message": response_text,
                 "dob": session.get("dob"), "birth_time": session.get("birth_time"),
@@ -335,9 +333,9 @@ class ChatService:
             return {"session_id": session_id, "message": "Kripya dobara koshish karein.",
                     "dob": None, "birth_time": None, "birth_place": None, "language": "Hinglish"}
 
-    
+    # ------------------------------------------------------------------
     # STREAMING — POST /api/chat/stream
-     
+    # ------------------------------------------------------------------
     def process_chat_message_stream(self, session_id: str, message_text: str):
         logger.info(f"Processing chat message (stream) for session: {session_id}")
         try:
@@ -402,7 +400,6 @@ class ChatService:
                            "birth_place": session.get("birth_place"), "language": language}
                     return
 
-            # Topic classification — drives RAG bias, chart emphasis, divisional chart, and footer
             topic = classify_topic(message_text) if (is_astrology and not missing_fields) else None
 
             context_str = ""
@@ -422,11 +419,16 @@ class ChatService:
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text)
 
+            user_memory = ""
+            if is_astrology and not missing_fields:
+                user_memory = self._get_user_memory_block(session, topic)
+
             astrologer_prompt = ASTROLOGER_PROMPT.format(
                 language=language, dob=session.get("dob") or "Not provided",
                 birth_time=session.get("birth_time") or "Not provided",
                 birth_place=session.get("birth_place") or "Not provided",
                 context=context_str or "No book context.", kundli_data=final_kundli_data,
+                user_memory=user_memory or "No prior topics discussed yet.",
                 history=history_text, query=message_text
             )
 
@@ -435,14 +437,16 @@ class ChatService:
                 for token in llm_service.generate_stream(prompt=astrologer_prompt, temperature=0.6):
                     full_text += token
                     yield {"type": "chunk", "text": token}
-
-                
             except Exception as gen_err:
                 logger.error(f"Streaming generation failed: {gen_err}")
                 full_text = "Mujhe samajhne mein kuch pareshani ho gayi."
                 yield {"type": "chunk", "text": full_text}
 
             db.add_message(session_id, "assistant", full_text)
+
+            if is_astrology and not missing_fields:
+                self._update_topic_memory(session_id, session, topic, full_text)
+
             yield {"type": "done", "session_id": session_id, "message": full_text,
                    "dob": session.get("dob"), "birth_time": session.get("birth_time"),
                    "birth_place": session.get("birth_place"), "language": language}

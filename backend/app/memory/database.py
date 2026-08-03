@@ -35,6 +35,7 @@ class MemoryDatabase:
                     kundli_raw TEXT,
                     kundli_dasha TEXT,
                     kundli_divisional TEXT,
+                    topic_memory TEXT,
                     dashboard_prediction TEXT,
                     dashboard_lucky_color TEXT,
                     dashboard_date TEXT,
@@ -54,6 +55,7 @@ class MemoryDatabase:
                 ("kundli_raw", "TEXT"),
                 ("kundli_dasha", "TEXT"),
                 ("kundli_divisional", "TEXT"),
+                ("topic_memory", "TEXT"),   # per-topic summary of past predictions — resets with the session
                 ("dashboard_prediction", "TEXT"),
                 ("dashboard_lucky_color", "TEXT"),
                 ("dashboard_date", "TEXT"),
@@ -87,19 +89,19 @@ class MemoryDatabase:
                 """
                 INSERT INTO sessions (session_id, dob, birth_time, birth_place, language,
                                        pending_field, kundli_data, kundli_raw, kundli_dasha,
-                                       dashboard_prediction, dashboard_lucky_color, dashboard_date,
-                                       latitude, longitude, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       topic_memory, dashboard_prediction, dashboard_lucky_color,
+                                       dashboard_date, latitude, longitude, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (session_id, None, None, None, 'Hinglish', None, None, None, None,
-                 None, None, None, None, None, now_str)
+                 None, None, None, None, None, None, now_str)
             )
             conn.commit()
 
             return {
                 "session_id": session_id, "dob": None, "birth_time": None, "birth_place": None,
                 "gender": None, "name": None, "language": "Hinglish", "pending_field": None,
-                "kundli_data": None, "kundli_raw": None, "kundli_dasha": None,
+                "kundli_data": None, "kundli_raw": None, "kundli_dasha": None, "topic_memory": None,
                 "dashboard_prediction": None, "dashboard_lucky_color": None, "dashboard_date": None,
                 "latitude": None, "longitude": None, "updated_at": now_str
             }
@@ -111,10 +113,10 @@ class MemoryDatabase:
         allowed_fields = {
             "dob", "birth_time", "birth_place", "gender", "name", "language",
             "latitude", "longitude", "pending_field", "kundli_data", "kundli_raw", "kundli_dasha",
-            "dashboard_prediction", "dashboard_lucky_color", "dashboard_date"
+            "topic_memory", "dashboard_prediction", "dashboard_lucky_color", "dashboard_date"
         }
         nullable_ok = {
-            "pending_field", "kundli_data", "kundli_raw", "kundli_dasha",
+            "pending_field", "kundli_data", "kundli_raw", "kundli_dasha", "topic_memory",
             "dashboard_prediction", "dashboard_lucky_color", "dashboard_date"
         }
         fields_to_update = {
