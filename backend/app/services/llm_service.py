@@ -223,4 +223,56 @@ class LLMService:
         logger.info(f"Final extracted profile: dob={result['dob']}, time={result['birth_time']}, place={result['birth_place']}")
         return result
 
+    def generate_followups(self, response_text: str, language: str) -> list[str]:
+        prompt = f"""
+You are an expert Vedic astrology assistant helping users get the most out of a conversation with an astrologer.
+Based on the astrologer's response below, generate exactly 3 short, clickable follow-up questions.
+
+STRICT RULES:
+- Question 1 MUST always be about gemstones OR remedies (Upayas) relevant to the planet or issue mentioned. Examples: "Which gemstone should I wear for this?", "What remedy can reduce Rahu's effect?", "Which stone strengthens Jupiter for wealth?", "Should I wear Blue Sapphire for Saturn?", "What is the best remedy for my marriage?".
+- Question 2 should ask for more detail or timing about the prediction just given.
+- Question 3 should explore a related astrological topic (different life area, dasha, or planetary transit).
+
+Output EXACTLY a JSON array of 3 strings. Example: ["Gemstone/remedy question?", "Detail/timing question?", "Related topic question?"]
+Do NOT output anything else. No markdown. No intro text. No explanations.
+
+Language for questions: {language}
+
+Astrologer Response:
+{response_text}
+"""
+        try:
+            raw_response = self.generate(prompt=prompt, json_format=True, temperature=0.3)
+            cleaned = raw_response.strip()
+            
+            # Try parsing as JSON
+            try:
+                if cleaned.startswith("```json"):
+                    cleaned = cleaned[7:]
+                if cleaned.startswith("```"):
+                    cleaned = cleaned[3:]
+                if cleaned.endswith("```"):
+                    cleaned = cleaned[:-3]
+                cleaned = cleaned.strip()
+                
+                parsed = json.loads(cleaned)
+                if isinstance(parsed, list):
+                    return [str(q) for q in parsed[:3]]
+                elif isinstance(parsed, dict):
+                    for k, v in parsed.items():
+                        if isinstance(v, list):
+                            return [str(q) for q in v[:3]]
+            except json.JSONDecodeError:
+                pass
+            
+            # Regex fallback if JSON fails
+            questions = re.findall(r'"([^"]+\?)"', raw_response)
+            if questions:
+                return questions[:3]
+                
+            return []
+        except Exception as e:
+            logger.error(f"Failed to generate followups: {e}")
+            return []
+
 llm_service = LLMService()

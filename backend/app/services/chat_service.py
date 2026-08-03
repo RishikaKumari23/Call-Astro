@@ -323,14 +323,15 @@ class ChatService:
                 response_text = "Mujhe samajhne mein kuch pareshani ho gayi."
 
             db.add_message(session_id, "assistant", response_text)
-
             if is_astrology and not missing_fields:
                 self._update_topic_memory(session_id, session, topic, response_text)
 
+            suggestions = llm_service.generate_followups(response_text, language)
             return {
                 "session_id": session_id, "message": response_text,
                 "dob": session.get("dob"), "birth_time": session.get("birth_time"),
-                "birth_place": session.get("birth_place"), "language": language
+                "birth_place": session.get("birth_place"), "language": language,
+                "suggestions": suggestions
             }
         except Exception as e:
             logger.error(f"Chat processing error: {e}")
@@ -447,13 +448,17 @@ class ChatService:
                 yield {"type": "chunk", "text": full_text}
 
             db.add_message(session_id, "assistant", full_text)
-
             if is_astrology and not missing_fields:
                 self._update_topic_memory(session_id, session, topic, full_text)
+            
+            suggestions = []
+            if full_text and len(full_text) > 20:
+                suggestions = llm_service.generate_followups(full_text, language)
 
             yield {"type": "done", "session_id": session_id, "message": full_text,
                    "dob": session.get("dob"), "birth_time": session.get("birth_time"),
-                   "birth_place": session.get("birth_place"), "language": language}
+                   "birth_place": session.get("birth_place"), "language": language,
+                   "suggestions": suggestions}
 
         except Exception as e:
             logger.error(f"Chat streaming error: {e}")
