@@ -439,3 +439,52 @@ def format_reasoning_trace_text(steps: List[dict], language: str = "Hinglish") -
     for s in steps:
         lines.append(f"{s['step']}. {s['title']}\n   {s['detail']}")
     return "\n\n".join(lines)
+
+def rank_favorable_periods(upcoming_periods: List[dict], topic: str, top_n: int = 3) -> List[dict]:
+    """Ranks upcoming Antardasha periods by how many of the topic's
+    significator planets are involved (Mahadasha lord + Antardasha lord).
+    A period where BOTH lords are significators for this topic ranks
+    highest — e.g. Venus Mahadasha + Jupiter Antardasha for a marriage
+    question, since both are marriage significators."""
+    config = TOPIC_CHART_FACTORS.get(topic)
+    if not config or not upcoming_periods:
+        return []
+
+    significators = set(config["planets"])
+    scored = []
+    for period in upcoming_periods:
+        score = 0
+        if period.get("mahadasha") in significators:
+            score += 2  # Mahadasha match weighted higher — it's the dominant influence
+        if period.get("antardasha") in significators:
+            score += 1
+        if score > 0:
+            scored.append({**period, "favorability_score": score})
+
+    scored.sort(key=lambda p: p["favorability_score"], reverse=True)
+    return scored[:top_n]
+
+
+def format_dasha_timeline_for_prompt(upcoming_periods: List[dict], favorable_periods: List[dict], language: str = "Hinglish") -> str:
+    """Formats the upcoming dasha timeline + ranked favorable periods into
+    short plain text for the LLM prompt — not raw JSON."""
+    if not upcoming_periods:
+        return ""
+
+    lines = ["Upcoming Dasha Periods (next few years):"]
+    for p in upcoming_periods[:8]:  # cap to keep prompt size reasonable
+        maha = p.get("mahadasha", "")
+        antar = p.get("antardasha", "")
+        start = p.get("start", "").split(" ")[0]  # date only, drop time
+        end = p.get("end", "").split(" ")[0]
+        lines.append(f"- {maha} Mahadasha / {antar} Antardasha: {start} to {end}")
+
+    if favorable_periods:
+        lines.append("\nMost favorable upcoming periods for this topic:")
+        for p in favorable_periods:
+            maha = p.get("mahadasha", "")
+            antar = p.get("antardasha", "")
+            start = p.get("start", "").split(" ")[0]
+            lines.append(f"- {maha}/{antar}: starting {start} (strong match for this question)")
+
+    return "\n".join(lines)

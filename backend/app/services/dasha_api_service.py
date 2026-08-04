@@ -23,27 +23,27 @@ def _parse_dt(date_str: str) -> Optional[datetime]:
 
 
 class DashaApiService:
-
     def fetch_dasha_tree(
         self,
-        date: str,           # expects DD-MM-YYYY, same as your other services
-        time: str,           # expects HH:MM 24h
+        date: str,
+        time: str,
         latitude: float,
         longitude: float,
+        ascendant_data: Dict,
         timezone_name: str = "Asia/Kolkata",
         language: str = "english",
         max_retries: int = 2,
     ) -> Optional[List[Dict]]:
         payload = {
             "requirements": [FEATURE],
-            # NOTE: this Lambda uses different field names than kundli_service.py's Lambda
             "dateOfBirth": date,
             "time_of_birth": time,
             "latitude": str(latitude),
             "longitude": str(longitude),
             "timezone_name": timezone_name,
             "language": language,
-        }
+            "ascendant_data": ascendant_data,
+        }    
 
         req = urllib.request.Request(
             DASHA_LAMBDA_URL,
@@ -152,6 +152,54 @@ class DashaApiService:
             }
 
         return result
+    
+    
+    def flatten_periods(self, dasha_tree: List[Dict], level: str = "antardasha") -> List[Dict]:
+        """Flattens the nested Mahadasha -> Antardasha tree into a single
+        chronological list of periods at the requested level. Each period
+        includes which Mahadasha it belongs to, so downstream code can
+        reason about combinations (e.g. 'Venus Mahadasha + Jupiter Antardasha')."""
+        flat = []
+        for maha in dasha_tree:
+            maha_lord = maha.get("mahadasha") or maha.get("mahadasha_display")
+            if level == "mahadasha":
+                flat.append({
+                    "mahadasha": maha_lord,
+                    "antardasha": None,
+                    "start": maha.get("start"),
+                    "end": maha.get("end"),
+                })
+                continue
+            for antar in maha.get("antardasha", []):
+                antar_lord = antar.get("antardasha") or antar.get("antardasha_display")
+                flat.append({
+                    "mahadasha": maha_lord,
+                    "antardasha": antar_lord,
+                    "start": antar.get("start"),
+                    "end": antar.get("end"),
+                })
+        return flat
+
+    def get_upcoming_periods(self, dasha_tree: List[Dict], months_ahead: int = 60) -> List[Dict]:
+        """Returns Antardasha-level periods from today through `months_ahead`
+        months into the future — the practical window for 'when will X happen'
+        questions (5 years by default)."""
+        now = datetime.now()
+        cutoff = now.replace(year=now.year + (months_ahead // 12))
+
+        all_periods = self.flatten_periods(dasha_tree, level="antardasha")
+        upcoming = []
+        for period in all_periods:
+            end = _parse_dt(period.get("end", ""))
+            start = _parse_dt(period.get("start", ""))
+            if not start or not end:
+                continue
+            if end < now:
+                continue  # already passed
+            if start > cutoff:
+                break  # too far ahead, stop scanning (tree is chronological)
+            upcoming.append(period)
+        return upcoming
 
 
 dasha_api_service = DashaApiService()

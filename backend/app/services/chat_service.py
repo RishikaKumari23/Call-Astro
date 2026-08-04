@@ -14,6 +14,8 @@ from app.services.topic_service import (
     classify_topic, build_topic_emphasis, get_search_bias,
     build_explanation_footer, TOPIC_CHART_FACTORS
 )
+from app.services.dasha_api_service import dasha_api_service
+from app.services.topic_service import classify_topic, rank_favorable_periods, format_dasha_timeline_for_prompt
 
 
 class ChatService:
@@ -42,7 +44,7 @@ class ChatService:
                 return parsed_time.strftime("%H:%M")
             except ValueError:
                 return time_str
-
+    
     def _fetch_and_cache_kundli(self, session_id: str, session: Dict) -> str:
         try:
             coords = geocoding_service.geocode(session.get("birth_place"))
@@ -65,22 +67,25 @@ class ChatService:
                 chart_data = kundli_service.extract_chart_data(kundli_data)
                 chart_json = json.dumps(chart_data) if chart_data else None
                 dasha_json = json.dumps(dasha_info) if dasha_info else None
+                full_raw_json = json.dumps(kundli_data, ensure_ascii=False)  # NEW — full response cache
 
                 db.update_session(session_id, {
                     "kundli_data": kundli_str,
                     "kundli_raw": chart_json,
                     "kundli_dasha": dasha_json,
+                    "kundli_full_raw": full_raw_json,   # NEW
                 })
                 session["kundli_data"] = kundli_str
                 session["kundli_raw"] = chart_json
                 session["kundli_dasha"] = dasha_json
-                logger.info("Kundli data fetched and cached (summary + chart + dasha)")
+                session["kundli_full_raw"] = full_raw_json   # NEW
+                logger.info("Kundli data fetched and cached (summary + chart + dasha + full raw)")
                 return kundli_str
         except Exception as kundli_err:
             logger.error(f"Kundli fetch failed: {kundli_err}")
 
         return "No chart data available."
-
+    
     def _get_rag_context(self, message_text: str, topic: Optional[str] = None):
         """Returns (context_str, source_names_list)."""
         try:
@@ -122,8 +127,8 @@ class ChatService:
         except Exception as topic_err:
             logger.error(f"Topic emphasis build failed: {topic_err}")
         return ""
-
-    def _get_divisional_chart_text(self, session: Dict, topic: Optional[str]) -> str:
+    
+    def _get_divisional_chart_text(self, session_id: str, session: Dict, topic: Optional[str]) -> str:
         if not topic:
             return ""
         config = TOPIC_CHART_FACTORS.get(topic, {})
@@ -132,15 +137,7 @@ class ChatService:
             return ""
 
         try:
-            coords = geocoding_service.geocode(session.get("birth_place"))
-            if not coords:
-                return ""
-            lat, lon = coords
-            time_24h = self._to_24h(session.get("birth_time", ""))
-            kundli_data = kundli_service.fetch_kundli(
-                name=session.get("name") or "User",
-                date=session.get("dob"), time=time_24h, latitude=lat, longitude=lon,
-            )
+            kundli_data = self._get_full_kundli_response(session_id, session)
             if not kundli_data:
                 return ""
 
@@ -150,24 +147,8 @@ class ChatService:
         except Exception as e:
             logger.error(f"Divisional chart fetch failed: {e}")
             return ""
-
-    def _build_footer(self, session: Dict, topic: Optional[str], language: str) -> str:
-        try:
-            ascendant_sign = None
-            cached_raw = session.get("kundli_raw")
-            if cached_raw:
-                parsed = json.loads(cached_raw)
-                ascendant_sign = parsed.get("ascendant_sign")
-
-            dasha_info = None
-            cached_dasha = session.get("kundli_dasha")
-            if cached_dasha:
-                dasha_info = json.loads(cached_dasha)
-
-            return build_explanation_footer(topic, ascendant_sign, dasha_info, language)
-        except Exception as e:
-            logger.error(f"Footer build failed: {e}")
-            return ""
+    
+    
 
     def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str) -> str:
         parts = [p for p in [kundli_str, topic_emphasis, divisional_text] if p]
@@ -317,8 +298,7 @@ class ChatService:
             divisional_text = ""
             if is_astrology and not missing_fields and topic:
                 topic_emphasis = self._get_topic_emphasis(session, topic)
-                divisional_text = self._get_divisional_chart_text(session, topic)
-
+                divisional_text = self._get_divisional_chart_text(session_id, session, topic)
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text)
 
             user_memory = ""
@@ -326,17 +306,50 @@ class ChatService:
             if is_astrology and not missing_fields:
                 consistency_note = self._get_consistency_note(session, topic)
                 user_memory = self._get_user_memory_block(session, topic)
+            
+            
+            # Dasha Timeline — only run for topic-specific questions where "when" matters
+            dasha_timeline_str = ""
+            if topic:
+                try:
+                    time_24h = self._to_24h(session.get("birth_time", ""))
+                    coords_lat = session.get("latitude")
+                    coords_lon = session.get("longitude")
+                    if coords_lat and coords_lon:
+                        kundli_raw_full = self._get_full_kundli_response(session_id, session)
+                        ascendant_data = kundli_service.get_ascendant_data(kundli_raw_full) if kundli_raw_full else None
 
+                        if ascendant_data:
+                            dasha_tree = dasha_api_service.fetch_dasha_tree(
+                                date=session.get("dob").replace("-", "/"),
+                                time=time_24h,
+                                latitude=coords_lat, longitude=coords_lon,
+                                ascendant_data=ascendant_data,
+                            )
+                            if dasha_tree:
+                                upcoming = dasha_api_service.get_upcoming_periods(dasha_tree, months_ahead=60)
+                                favorable = rank_favorable_periods(upcoming, topic)
+                                dasha_timeline_str = format_dasha_timeline_for_prompt(upcoming, favorable, language)
+                                logger.info(f"Dasha timeline built for topic '{topic}': {len(upcoming)} periods, {len(favorable)} favorable")
+                        else:
+                            logger.warning("Could not extract ascendant_data — skipping dasha timeline")
+                except Exception as dasha_err:
+                    logger.error(f"Dasha timeline fetch failed: {dasha_err}")
+            
+            
             try:
                 astrologer_prompt = ASTROLOGER_PROMPT.format(
-                    language=language, dob=session.get("dob") or "Not provided",
-                    birth_time=session.get("birth_time") or "Not provided",
-                    birth_place=session.get("birth_place") or "Not provided",
-                    context=context_str or "No book context.", kundli_data=final_kundli_data,
-                    user_memory=user_memory or "No prior topics discussed yet.",
-                    consistency_note=consistency_note or "No specific conflict detected.",
-                    history=history_text, query=message_text
-                )
+                 language=language, dob=session.get("dob") or "Not provided",
+                 birth_time=session.get("birth_time") or "Not provided",
+                 birth_place=session.get("birth_place") or "Not provided",
+                 context=context_str or "No book context.", kundli_data=final_kundli_data,
+                 user_memory=user_memory or "No prior topics discussed yet.",
+                 consistency_note=consistency_note or "No specific conflict detected.",
+                 dasha_timeline=dasha_timeline_str or "No timeline data available.",
+                 history=history_text, query=message_text
+            ) 
+              
+            
                 response_text = llm_service.generate(prompt=astrologer_prompt, temperature=0.6)
             except Exception as gen_err:
                 logger.error(f"Generation failed: {gen_err}")
@@ -444,8 +457,7 @@ class ChatService:
             divisional_text = ""
             if is_astrology and not missing_fields and topic:
                 topic_emphasis = self._get_topic_emphasis(session, topic)
-                divisional_text = self._get_divisional_chart_text(session, topic)
-
+                divisional_text = self._get_divisional_chart_text(session_id, session, topic)
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text)
 
             user_memory = ""
@@ -453,7 +465,36 @@ class ChatService:
             if is_astrology and not missing_fields:
                 consistency_note = self._get_consistency_note(session, topic)
                 user_memory = self._get_user_memory_block(session, topic)
+            
+            # Dasha Timeline — only run for topic-specific questions where "when" matters
+            dasha_timeline_str = ""
+            if topic:
+                try:
+                    time_24h = self._to_24h(session.get("birth_time", ""))
+                    coords_lat = session.get("latitude")
+                    coords_lon = session.get("longitude")
+                    if coords_lat and coords_lon:
+                        kundli_raw_full = self._get_full_kundli_response(session_id, session)
+                        ascendant_data = kundli_service.get_ascendant_data(kundli_raw_full) if kundli_raw_full else None
 
+                        if ascendant_data:
+                            dasha_tree = dasha_api_service.fetch_dasha_tree(
+                                date=session.get("dob").replace("-", "/"),
+                                time=time_24h,
+                                latitude=coords_lat, longitude=coords_lon,
+                                ascendant_data=ascendant_data,
+                            )
+                            if dasha_tree:
+                                upcoming = dasha_api_service.get_upcoming_periods(dasha_tree, months_ahead=60)
+                                favorable = rank_favorable_periods(upcoming, topic)
+                                dasha_timeline_str = format_dasha_timeline_for_prompt(upcoming, favorable, language)
+                                logger.info(f"Dasha timeline built for topic '{topic}': {len(upcoming)} periods, {len(favorable)} favorable")
+                        else:
+                            logger.warning("Could not extract ascendant_data — skipping dasha timeline")
+                except Exception as dasha_err:
+                    logger.error(f"Dasha timeline fetch failed: {dasha_err}")
+            
+            
             astrologer_prompt = ASTROLOGER_PROMPT.format(
                 language=language, dob=session.get("dob") or "Not provided",
                 birth_time=session.get("birth_time") or "Not provided",
@@ -461,9 +502,10 @@ class ChatService:
                 context=context_str or "No book context.", kundli_data=final_kundli_data,
                 user_memory=user_memory or "No prior topics discussed yet.",
                 consistency_note=consistency_note or "No specific conflict detected.",
+                dasha_timeline=dasha_timeline_str or "No timeline data available.",
                 history=history_text, query=message_text
             )
-
+            
             full_text = ""
             try:
                 for token in llm_service.generate_stream(prompt=astrologer_prompt, temperature=0.6):
@@ -542,6 +584,32 @@ class ChatService:
         except Exception as e:
             logger.error(f"Reasoning trace build failed: {e}")
             return []
+        
+        
+    def _get_full_kundli_response(self, session_id: str, session: Dict) -> Optional[Dict]:
+        """Returns the full raw Kundli API response, using the cache if
+        available. Only calls the Lambda if nothing is cached yet — this is
+        the single choke point that prevents _get_divisional_chart_text,
+        the dasha timeline block, and anything else from each independently
+        refetching the same data over the network."""
+        cached_full_raw = session.get("kundli_full_raw")
+        if cached_full_raw:
+            try:
+                return json.loads(cached_full_raw)
+            except Exception as e:
+                logger.error(f"Failed to parse cached kundli_full_raw: {e}")
+                # fall through to refetch below
+
+        # Nothing cached (or parse failed) — trigger a real fetch, which
+        # will populate the cache via _fetch_and_cache_kundli for next time.
+        self._fetch_and_cache_kundli(session_id, session)
+        cached_full_raw = session.get("kundli_full_raw")
+        if cached_full_raw:
+            try:
+                return json.loads(cached_full_raw)
+            except Exception:
+                return None
+        return None
 
 
 chat_service = ChatService()
