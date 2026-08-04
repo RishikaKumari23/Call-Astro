@@ -263,13 +263,14 @@ function App() {
         {showEditModal && (
           <EditDetailsModal
             sessionId={sessionId} currentName={name} currentDob={dob}
-            currentBirthTime={birthTime} currentBirthPlace={birthPlace}
+            currentBirthTime={birthTime} currentBirthPlace={birthPlace} currentLanguage={language}
             onClose={() => setShowEditModal(false)}
             onSaved={async (profile) => {
               setName(profile.name);
               setDob(profile.dob);
               setBirthTime(profile.birth_time);
               setBirthPlace(profile.birth_place);
+              setLanguage(profile.language);
               setKundliPlanets(null);
               setAscendantSign(null);
               const historyRes = await fetch(`${API_BASE}/chat/history/${sessionId}`);

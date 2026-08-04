@@ -2,6 +2,7 @@ from datetime import date
 from typing import Optional
 from app.services.llm_service import llm_service
 from app.utils.logger import logger
+from datetime import date, timedelta
 
 MOON_SIGN_COLORS = {
     "Aries": "Red", "Taurus": "Green", "Gemini": "Yellow",

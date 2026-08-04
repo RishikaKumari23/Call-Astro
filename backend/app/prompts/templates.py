@@ -21,8 +21,12 @@ Extract the following fields from the user's message and history:
    Examples: "Lucknow", "Mumbai", "Hardol", "Delhi"
    If NOT found, return null.
 
-4. "language": Detect language from the message. Output exactly one of: "English", "Hindi", "Hinglish".
-   Default to "Hinglish" if mixed.
+4. 4. "language": Detect the language.
+
+- If the message is entirely in English, return "English".
+- If the message is entirely in Hindi, return "Hindi".
+- Return "Hinglish" only if the message genuinely mixes English and Hindi.
+- If unsure, default to "English".
 
 5. "is_astrology_query": Boolean. Is the user asking about astrology/predictions? (marriage, career, finance, future, etc.)
 
