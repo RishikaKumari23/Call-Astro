@@ -354,21 +354,29 @@ class ChatService:
             except Exception as gen_err:
                 logger.error(f"Generation failed: {gen_err}")
                 response_text = "Mujhe samajhne mein kuch pareshani ho gayi."
-
-            db.add_message(session_id, "assistant", response_text)
+            
+            db.add_message(session_id, "assistant", full_text)
 
             if is_astrology and not missing_fields:
-                self._cache_reasoning_trace(session_id, session, topic, rag_sources)
-                self._update_topic_memory(session_id, session, topic, response_text)
+                try:
+                    trace = self._build_reasoning_trace(session, topic, rag_sources)
+                    db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
+                except Exception as trace_err:
+                    logger.error(f"Reasoning trace caching failed: {trace_err}")
 
-            suggestions = self._safe_generate_followups(response_text, language)
+            suggestions = []
+            if full_text and len(full_text) > 20:
+                try:
+                    suggestions = llm_service.generate_followups(full_text, language)
+                except Exception as followup_err:
+                    logger.error(f"Follow-up suggestion generation failed: {followup_err}")
+                    suggestions = []
 
-            return {
-                "session_id": session_id, "message": response_text,
-                "dob": session.get("dob"), "birth_time": session.get("birth_time"),
-                "birth_place": session.get("birth_place"), "language": language,
-                "suggestions": suggestions
-            }
+            yield {"type": "done", "session_id": session_id, "message": full_text,
+                   "dob": session.get("dob"), "birth_time": session.get("birth_time"),
+                   "birth_place": session.get("birth_place"), "language": language,
+                   "suggestions": suggestions}
+           
         except Exception as e:
             logger.error(f"Chat processing error: {e}")
             return {"session_id": session_id, "message": "Kripya dobara koshish karein.",
@@ -515,21 +523,30 @@ class ChatService:
                 logger.error(f"Streaming generation failed: {gen_err}")
                 full_text = "Mujhe samajhne mein kuch pareshani ho gayi."
                 yield {"type": "chunk", "text": full_text}
-
+            
             db.add_message(session_id, "assistant", full_text)
 
             if is_astrology and not missing_fields:
-                self._cache_reasoning_trace(session_id, session, topic, rag_sources)
-                self._update_topic_memory(session_id, session, topic, full_text)
+                try:
+                    trace = self._build_reasoning_trace(session, topic, rag_sources)
+                    db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
+                except Exception as trace_err:
+                    logger.error(f"Reasoning trace caching failed: {trace_err}")
 
             suggestions = []
             if full_text and len(full_text) > 20:
-                suggestions = self._safe_generate_followups(full_text, language)
+                try:
+                    suggestions = llm_service.generate_followups(full_text, language)
+                except Exception as followup_err:
+                    logger.error(f"Follow-up suggestion generation failed: {followup_err}")
+                    suggestions = []
 
             yield {"type": "done", "session_id": session_id, "message": full_text,
                    "dob": session.get("dob"), "birth_time": session.get("birth_time"),
                    "birth_place": session.get("birth_place"), "language": language,
                    "suggestions": suggestions}
+            
+            
 
         except Exception as e:
             logger.error(f"Chat streaming error: {e}")
