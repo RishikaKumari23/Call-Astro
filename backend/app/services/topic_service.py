@@ -16,15 +16,19 @@ TOPIC_CHART_FACTORS = {
         "divisional_chart": "D9",
     },
     "health": {
-        "house": 6, "planets": ["Saturn", "Mars"],
-        "keywords": ["health", "sehat", "illness", "disease", "body"],
-        "search_bias": "health disease 6th house Saturn Mars",
+        # 1st house (Lagna) = physical body & vitality — primary health indicator.
+        # 6th house governs disease specifically; both are checked via search_bias.
+        "house": 1, "planets": ["Saturn", "Mars", "Moon"],
+        "keywords": ["health", "sehat", "illness", "disease", "body", "bimari"],
+        "search_bias": "health disease 1st house 6th house Lagna Saturn Mars Moon",
         "divisional_chart": None,
     },
     "finance": {
-        "house": 2, "planets": ["Jupiter", "Venus"],
-        "keywords": ["money", "finance", "paisa", "wealth", "income", "dhan"],
-        "search_bias": "wealth money finance 2nd house 11th house Jupiter Venus",
+        # 11th house = income & gains (what people usually mean by "finance").
+        # 2nd house = accumulated wealth/savings — covered in search_bias.
+        "house": 11, "planets": ["Jupiter", "Venus", "Mercury"],
+        "keywords": ["money", "finance", "paisa", "wealth", "income", "dhan", "paise"],
+        "search_bias": "wealth money finance income gains 2nd house 11th house Jupiter Venus Mercury",
         "divisional_chart": None,
     },
     "education": {
@@ -79,9 +83,14 @@ TOPIC_RELEVANT_BOOKS = {
     ],
 }
 NATURAL_BENEFICS = {"Jupiter", "Venus", "Mercury", "Moon"}
-NATURAL_MALEFICS = {"Saturn", "Mars", "Rahu", "Ketu", "Sun"}
+# Sun is NOT a universal malefic in Jyotish — it is a functional benefic for many
+# ascendants (e.g. Leo, Aries, Scorpio). Treating it as neutral avoids incorrect
+# consistency scores across different Lagnas.
+NATURAL_MALEFICS = {"Saturn", "Mars", "Rahu", "Ketu"}
 
-KENDRA_TRIKONA_HOUSES = {1, 4, 5, 7, 9, 10, 11}   # strong/supportive houses
+# Kendra houses: 1, 4, 7, 10 | Trikona houses: 1, 5, 9
+# House 11 is an Upachaya (growth) house, NOT a Kendra or Trikona.
+KENDRA_TRIKONA_HOUSES = {1, 4, 5, 7, 9, 10}       # strong/supportive houses
 DUSTHANA_HOUSES = {6, 8, 12}                       # weak/challenging houses
 
 def classify_topic(message: str) -> Optional[str]:
