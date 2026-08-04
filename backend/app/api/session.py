@@ -1,14 +1,14 @@
 import json
+from datetime import date
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import SessionInfoResponse
 from app.memory.database import db
 from app.services.geocoding_service import geocoding_service
-from app.utils.logger import logger
-from datetime import date, timedelta
 from app.services.dashboard_service import get_lucky_color, generate_daily_prediction, generate_weekly_guidance
-
+from app.utils.logger import logger
 
 router = APIRouter(prefix="/session", tags=["Session"])
+
 
 @router.get("/{session_id}", response_model=SessionInfoResponse)
 async def get_session_info(session_id: str):
@@ -25,6 +25,7 @@ async def get_session_info(session_id: str):
         logger.error(f"Error fetching session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/{session_id}/kundli-chart")
 async def get_kundli_chart(session_id: str):
     try:
@@ -38,13 +39,31 @@ async def get_kundli_chart(session_id: str):
         logger.error(f"Error fetching kundli chart: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/{session_id}/reasoning-trace")
+async def get_reasoning_trace(session_id: str):
+    """Powers the 'How I Reached This' panel — returns the cached step-by-step
+    reasoning trace from the most recent astrology response."""
+    try:
+        session = db.get_or_create_session(session_id)
+        raw = session.get("last_reasoning_trace")
+        if not raw:
+            return {"available": False, "steps": []}
+        steps = json.loads(raw)
+        if not steps:
+            return {"available": False, "steps": []}
+        return {"available": True, "steps": steps}
+    except Exception as e:
+        logger.error(f"Error fetching reasoning trace: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{session_id}/dashboard")
 async def get_dashboard(session_id: str):
     try:
         session = db.get_or_create_session(session_id)
         today_str = date.today().isoformat()
 
-        # Serve from cache only if it was a real successful generation
         if session.get("dashboard_date") == today_str and session.get("dashboard_prediction"):
             return {
                 "available": True,
@@ -69,8 +88,6 @@ async def get_dashboard(session_id: str):
         prediction = generate_daily_prediction(kundli_summary, session.get("language", "Hinglish"))
 
         if prediction is None:
-            # Generation failed — return a fallback to the user for THIS request only,
-            # but do NOT cache it, so the next request tries generating fresh again
             logger.warning(f"Dashboard prediction generation failed for session {session_id} — not caching")
             return {
                 "available": True,
@@ -78,7 +95,6 @@ async def get_dashboard(session_id: str):
                 "lucky_color": lucky_color,
             }
 
-        # Only cache on genuine success
         db.update_session(session_id, {
             "dashboard_prediction": prediction,
             "dashboard_lucky_color": lucky_color,
@@ -89,74 +105,12 @@ async def get_dashboard(session_id: str):
         logger.error(f"Error generating dashboard: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/{session_id}/recalculate-kundli")
-async def recalculate_kundli(session_id: str):
-    """Force a fresh Kundli fetch — used right after editing birth details."""
-    from app.services.chat_service import chat_service
-    try:
-        session = db.get_or_create_session(session_id)
-        kundli_str = chat_service._fetch_and_cache_kundli(session_id, session)
-        return {"success": kundli_str != "No chart data available."}
-    except Exception as e:
-        logger.error(f"Error recalculating kundli: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/{session_id}", response_model=SessionInfoResponse)
-async def update_session_info(session_id: str, profile_update: dict):
-    try:
-        birth_fields_changed = any(k in profile_update for k in ("dob", "birth_time", "birth_place"))
-
-        if profile_update.get("birth_place"):
-            coords = geocoding_service.geocode(profile_update["birth_place"])
-            if coords:
-                profile_update["latitude"], profile_update["longitude"] = coords
-            else:
-                logger.warning(f"Could not geocode birth_place: {profile_update['birth_place']}")
-
-        if birth_fields_changed:
-            profile_update["kundli_data"] = None
-            profile_update["kundli_raw"] = None
-            profile_update["dashboard_prediction"] = None
-            profile_update["dashboard_date"] = None
-            logger.info(f"Birth details changed for {session_id} — cleared cached Kundli/dashboard data")
-
-        updated = db.update_session(session_id, profile_update)
-
-        if birth_fields_changed:
-            db.add_message(session_id, "system", "📝 Birth details updated — your chart has been recalculated.")
-
-        return SessionInfoResponse(
-            session_id=updated["session_id"], dob=updated.get("dob"),
-            birth_time=updated.get("birth_time"), birth_place=updated.get("birth_place"),
-            gender=updated.get("gender"), name=updated.get("name"),
-            latitude=updated.get("latitude"), longitude=updated.get("longitude"),
-            language=updated.get("language", "Hinglish"), updated_at=updated.get("updated_at")
-        )
-    except Exception as e:
-        logger.error(f"Error updating session info: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.delete("/{session_id}")
-async def clear_session(session_id: str):
-    try:
-        with db._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
-            cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-            conn.commit()
-        return {"status": "success", "message": f"Session {session_id} has been cleared."}
-    except Exception as e:
-        logger.error(f"Error clearing session: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    
-    
 
 @router.get("/{session_id}/weekly-guidance")
 async def get_weekly_guidance(session_id: str):
     try:
         session = db.get_or_create_session(session_id)
         today = date.today()
-        # ISO week identifier so it regenerates once per calendar week, not per day
         week_id = today.strftime("%Y-W%W")
 
         if session.get("weekly_week_start") == week_id and session.get("weekly_guidance"):
@@ -187,13 +141,73 @@ async def get_weekly_guidance(session_id: str):
         return {"available": True, "guidance": guidance}
     except Exception as e:
         logger.error(f"Error generating weekly guidance: {e}")
-        raise HTTPException(status_code=500, detail=str(e))   
-    
-@router.get("/{session_id}/reasoning-trace")
-async def get_reasoning_trace(session_id: str):
-    """Powers the 'Explain how you reached this' button."""
-    session = db.get_or_create_session(session_id)
-    raw = session.get("last_reasoning_trace")
-    if not raw:
-        return {"available": False, "steps": []}
-    return {"available": True, "steps": json.loads(raw)} 
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{session_id}/recalculate-kundli")
+async def recalculate_kundli(session_id: str):
+    """Force a fresh Kundli fetch — used right after editing birth details."""
+    from app.services.chat_service import chat_service
+    try:
+        session = db.get_or_create_session(session_id)
+        kundli_str = chat_service._fetch_and_cache_kundli(session_id, session)
+        return {"success": kundli_str != "No chart data available."}
+    except Exception as e:
+        logger.error(f"Error recalculating kundli: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{session_id}", response_model=SessionInfoResponse)
+async def update_session_info(session_id: str, profile_update: dict):
+    try:
+        birth_fields_changed = any(k in profile_update for k in ("dob", "birth_time", "birth_place"))
+
+        if profile_update.get("birth_place"):
+            coords = geocoding_service.geocode(profile_update["birth_place"])
+            if coords:
+                profile_update["latitude"], profile_update["longitude"] = coords
+            else:
+                logger.warning(f"Could not geocode birth_place: {profile_update['birth_place']}")
+
+        if birth_fields_changed:
+            profile_update["kundli_data"] = None
+            profile_update["kundli_raw"] = None
+            profile_update["kundli_dasha"] = None
+            profile_update["kundli_full_raw"] = None
+            profile_update["dashboard_prediction"] = None
+            profile_update["dashboard_date"] = None
+            profile_update["weekly_guidance"] = None
+            profile_update["weekly_week_start"] = None
+            profile_update["topic_memory"] = None
+            profile_update["last_reasoning_trace"] = None
+            logger.info(f"Birth details changed for {session_id} — cleared all cached derived data")
+
+        updated = db.update_session(session_id, profile_update)
+
+        if birth_fields_changed:
+            db.add_message(session_id, "system", "📝 Birth details updated — your chart has been recalculated.")
+
+        return SessionInfoResponse(
+            session_id=updated["session_id"], dob=updated.get("dob"),
+            birth_time=updated.get("birth_time"), birth_place=updated.get("birth_place"),
+            gender=updated.get("gender"), name=updated.get("name"),
+            latitude=updated.get("latitude"), longitude=updated.get("longitude"),
+            language=updated.get("language", "Hinglish"), updated_at=updated.get("updated_at")
+        )
+    except Exception as e:
+        logger.error(f"Error updating session info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{session_id}")
+async def clear_session(session_id: str):
+    try:
+        with db._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+            cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            conn.commit()
+        return {"status": "success", "message": f"Session {session_id} has been cleared."}
+    except Exception as e:
+        logger.error(f"Error clearing session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

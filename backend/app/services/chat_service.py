@@ -321,7 +321,7 @@ class ChatService:
 
                         if ascendant_data:
                             dasha_tree = dasha_api_service.fetch_dasha_tree(
-                                date=session.get("dob").replace("-", "/"),
+                                date=session.get("dob"),
                                 time=time_24h,
                                 latitude=coords_lat, longitude=coords_lon,
                                 ascendant_data=ascendant_data,
@@ -372,10 +372,12 @@ class ChatService:
                     logger.error(f"Follow-up suggestion generation failed: {followup_err}")
                     suggestions = []
 
-            yield {"type": "done", "session_id": session_id, "message": response_text,
-                   "dob": session.get("dob"), "birth_time": session.get("birth_time"),
-                   "birth_place": session.get("birth_place"), "language": language,
-                   "suggestions": suggestions}
+            return {
+                "session_id": session_id, "message": response_text,
+                "dob": session.get("dob"), "birth_time": session.get("birth_time"),
+                "birth_place": session.get("birth_place"), "language": language,
+                "suggestions": suggestions
+            }
            
         except Exception as e:
             logger.error(f"Chat processing error: {e}")
@@ -487,7 +489,7 @@ class ChatService:
 
                         if ascendant_data:
                             dasha_tree = dasha_api_service.fetch_dasha_tree(
-                                date=session.get("dob").replace("-", "/"),
+                                date=session.get("dob"),
                                 time=time_24h,
                                 latitude=coords_lat, longitude=coords_lon,
                                 ascendant_data=ascendant_data,

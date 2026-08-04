@@ -44,7 +44,7 @@ class DashaApiService:
             "language": language,
             "ascendant_data": ascendant_data,
         }    
-
+        
         req = urllib.request.Request(
             DASHA_LAMBDA_URL,
             data=json.dumps(payload).encode("utf-8"),
@@ -54,7 +54,7 @@ class DashaApiService:
             },
             method="POST",
         )
-
+        logger.info(f"Dasha API payload being sent: {json.dumps(payload, default=str)}")
         for attempt in range(1, max_retries + 2):
             try:
                 with urllib.request.urlopen(req, timeout=60) as resp:
