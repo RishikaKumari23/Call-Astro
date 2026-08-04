@@ -355,7 +355,7 @@ class ChatService:
                 logger.error(f"Generation failed: {gen_err}")
                 response_text = "Mujhe samajhne mein kuch pareshani ho gayi."
             
-            db.add_message(session_id, "assistant", full_text)
+            db.add_message(session_id, "assistant", response_text)
 
             if is_astrology and not missing_fields:
                 try:
@@ -365,14 +365,14 @@ class ChatService:
                     logger.error(f"Reasoning trace caching failed: {trace_err}")
 
             suggestions = []
-            if full_text and len(full_text) > 20:
+            if response_text and len(response_text) > 20:
                 try:
-                    suggestions = llm_service.generate_followups(full_text, language)
+                    suggestions = llm_service.generate_followups(response_text, language)
                 except Exception as followup_err:
                     logger.error(f"Follow-up suggestion generation failed: {followup_err}")
                     suggestions = []
 
-            yield {"type": "done", "session_id": session_id, "message": full_text,
+            yield {"type": "done", "session_id": session_id, "message": response_text,
                    "dob": session.get("dob"), "birth_time": session.get("birth_time"),
                    "birth_place": session.get("birth_place"), "language": language,
                    "suggestions": suggestions}
