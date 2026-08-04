@@ -11,6 +11,7 @@ import EditDetailsModal from './components/EditDetailsModal';
 import GoToChatCard from './components/GoToChatCard';
 import WeeklyGuidance from './components/WeeklyGuidance';
 import FaqStarter from './components/FaqStarter';
+import ReasoningTrace from './components/ReasoningTrace';
 
 interface Message { role: 'user' | 'assistant' | 'system'; content: string; timestamp?: string; }
 interface IngestStatus { indexing_completed: boolean; total_chunks: number; loading: boolean; }
@@ -43,7 +44,7 @@ function App() {
   const [kundliPlanets, setKundliPlanets] = useState<any[] | null>(null);
   const [ascendantSign, setAscendantSign] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
-
+  const [traceRefreshKey, setTraceRefreshKey] = useState(0);
   const [ingestStatus, setIngestStatus] = useState<IngestStatus>({ indexing_completed: false, total_chunks: 0, loading: true });
 
   useEffect(() => {
@@ -165,6 +166,7 @@ function App() {
             if (event.suggestions && Array.isArray(event.suggestions)) {
               setSuggestions(event.suggestions);
             }
+            setTraceRefreshKey(prev => prev + 1);
           }
         }
       }
@@ -335,6 +337,7 @@ function App() {
         </main>
         <aside className="hidden lg:block w-72 border-l border-slate-200 bg-slate-50 p-4 overflow-y-auto shrink-0">
          <WeeklyGuidance sessionId={sessionId} />
+         <ReasoningTrace sessionId={sessionId} refreshKey={traceRefreshKey} language={language} />
         </aside>
 
       </div>

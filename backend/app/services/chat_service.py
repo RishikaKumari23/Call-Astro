@@ -61,8 +61,7 @@ class ChatService:
                 dasha_info = kundli_service.get_real_or_calculated_dasha(
                     kundli_data, session.get("dob"), time_24h, lat, lon
                 )
-
-                kundli_str = kundli_service.summarize_kundli(kundli_data)
+                kundli_str = kundli_service.summarize_kundli(kundli_data, dob=session.get("dob"))
                 chart_data = kundli_service.extract_chart_data(kundli_data)
                 chart_json = json.dumps(chart_data) if chart_data else None
                 dasha_json = json.dumps(dasha_info) if dasha_info else None
@@ -82,29 +81,31 @@ class ChatService:
 
         return "No chart data available."
 
-    def _get_rag_context(self, message_text: str, topic: Optional[str] = None) -> str:
+    def _get_rag_context(self, message_text: str, topic: Optional[str] = None):
+        """Returns (context_str, source_names_list)."""
         try:
             search_query = message_text
             if topic:
                 bias = get_search_bias(topic)
                 if bias:
                     search_query = f"{message_text} {bias}"
-                    logger.info(f"Classified topic: {topic} — biasing search query")
 
             query_vector = self.embeddings_provider.get_embedding(search_query)
             hits = vector_store.hybrid_search(
                 query=search_query, query_vector=query_vector,
                 top_k=settings.TOP_K_RETRIEVAL, alpha=settings.HYBRID_ALPHA
             )
-            context_chunks = [
-                f"--- Context {i+1} [Source: {hit['metadata'].get('source', 'Unknown')}] ---\n{hit['text']}\n"
-                for i, hit in enumerate(hits)
-            ]
+            context_chunks = []
+            sources = []
+            for i, hit in enumerate(hits):
+                source = hit['metadata'].get('source', 'Unknown')
+                sources.append(source)
+                context_chunks.append(f"--- Context {i+1} [Source: {source}] ---\n{hit['text']}\n")
             logger.info(f"Retrieved {len(hits)} chunks for query")
-            return "\n".join(context_chunks)
+            return "\n".join(context_chunks), sources
         except Exception as rag_err:
             logger.error(f"RAG failed: {rag_err}")
-            return "No reference available."
+            return "No reference available.", []
 
     def _get_topic_emphasis(self, session: Dict, topic: Optional[str]) -> str:
         if not topic:
@@ -218,6 +219,25 @@ class ChatService:
         except Exception as e:
             logger.error(f"Failed to update topic memory: {e}")
 
+    def _cache_reasoning_trace(self, session_id: str, session: Dict, topic: Optional[str], rag_sources: List[str]):
+        """Wrapped separately so a failure here never blocks the response
+        from completing — trace caching is a nice-to-have, not critical path."""
+        try:
+            trace = self._build_reasoning_trace(session, topic, rag_sources)
+            db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
+        except Exception as trace_err:
+            logger.error(f"Reasoning trace caching failed: {trace_err}")
+
+    def _safe_generate_followups(self, response_text: str, language: str) -> List[str]:
+        """Wrapped separately so a slow/failed Ollama call for follow-up
+        suggestions can never prevent the main response from completing —
+        this caused the stream to die mid-response before this fix."""
+        try:
+            return llm_service.generate_followups(response_text, language) or []
+        except Exception as followup_err:
+            logger.error(f"Follow-up suggestion generation failed: {followup_err}")
+            return []
+
     # ------------------------------------------------------------------
     # NON-STREAMING — POST /api/chat
     # ------------------------------------------------------------------
@@ -284,8 +304,9 @@ class ChatService:
             topic = classify_topic(message_text) if (is_astrology and not missing_fields) else None
 
             context_str = ""
+            rag_sources = []
             if is_astrology and not missing_fields:
-                context_str = self._get_rag_context(message_text, topic)
+                context_str, rag_sources = self._get_rag_context(message_text, topic)
 
             kundli_str = "No chart data available."
             if is_astrology and not missing_fields:
@@ -304,7 +325,6 @@ class ChatService:
             consistency_note = ""
             if is_astrology and not missing_fields:
                 consistency_note = self._get_consistency_note(session, topic)
-            if is_astrology and not missing_fields:
                 user_memory = self._get_user_memory_block(session, topic)
 
             try:
@@ -323,10 +343,13 @@ class ChatService:
                 response_text = "Mujhe samajhne mein kuch pareshani ho gayi."
 
             db.add_message(session_id, "assistant", response_text)
+
             if is_astrology and not missing_fields:
+                self._cache_reasoning_trace(session_id, session, topic, rag_sources)
                 self._update_topic_memory(session_id, session, topic, response_text)
 
-            suggestions = llm_service.generate_followups(response_text, language)
+            suggestions = self._safe_generate_followups(response_text, language)
+
             return {
                 "session_id": session_id, "message": response_text,
                 "dob": session.get("dob"), "birth_time": session.get("birth_time"),
@@ -408,8 +431,9 @@ class ChatService:
             topic = classify_topic(message_text) if (is_astrology and not missing_fields) else None
 
             context_str = ""
+            rag_sources = []
             if is_astrology and not missing_fields:
-                context_str = self._get_rag_context(message_text, topic)
+                context_str, rag_sources = self._get_rag_context(message_text, topic)
 
             kundli_str = "No chart data available."
             if is_astrology and not missing_fields:
@@ -425,7 +449,9 @@ class ChatService:
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text)
 
             user_memory = ""
+            consistency_note = ""
             if is_astrology and not missing_fields:
+                consistency_note = self._get_consistency_note(session, topic)
                 user_memory = self._get_user_memory_block(session, topic)
 
             astrologer_prompt = ASTROLOGER_PROMPT.format(
@@ -434,6 +460,7 @@ class ChatService:
                 birth_place=session.get("birth_place") or "Not provided",
                 context=context_str or "No book context.", kundli_data=final_kundli_data,
                 user_memory=user_memory or "No prior topics discussed yet.",
+                consistency_note=consistency_note or "No specific conflict detected.",
                 history=history_text, query=message_text
             )
 
@@ -448,12 +475,14 @@ class ChatService:
                 yield {"type": "chunk", "text": full_text}
 
             db.add_message(session_id, "assistant", full_text)
+
             if is_astrology and not missing_fields:
+                self._cache_reasoning_trace(session_id, session, topic, rag_sources)
                 self._update_topic_memory(session_id, session, topic, full_text)
-            
+
             suggestions = []
             if full_text and len(full_text) > 20:
-                suggestions = llm_service.generate_followups(full_text, language)
+                suggestions = self._safe_generate_followups(full_text, language)
 
             yield {"type": "done", "session_id": session_id, "message": full_text,
                    "dob": session.get("dob"), "birth_time": session.get("birth_time"),
@@ -466,8 +495,7 @@ class ChatService:
             yield {"type": "chunk", "text": fallback}
             yield {"type": "done", "session_id": session_id, "message": fallback,
                    "dob": None, "birth_time": None, "birth_place": None, "language": "Hinglish"}
-    
-    
+
     def _get_consistency_note(self, session: Dict, topic: Optional[str]) -> str:
         """Build the Dasha-vs-chart consistency check and return the
         instruction text to inject into the prompt."""
@@ -490,5 +518,30 @@ class ChatService:
         except Exception as e:
             logger.error(f"Consistency check failed: {e}")
             return ""
+
+    def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits_sources: Optional[List[str]] = None) -> list:
+        if not topic:
+            return []
+        try:
+            cached_raw = session.get("kundli_raw")
+            cached_dasha = session.get("kundli_dasha")
+            if not cached_raw:
+                return []
+
+            parsed = json.loads(cached_raw)
+            planets = parsed.get("planets", [])
+            ascendant_sign = parsed.get("ascendant_sign")
+            dasha_info = json.loads(cached_dasha) if cached_dasha else None
+
+            from app.services.topic_service import build_consistency_check, build_reasoning_trace
+            consistency_check = build_consistency_check(topic, planets, ascendant_sign, dasha_info)
+
+            return build_reasoning_trace(
+                topic, ascendant_sign, planets, dasha_info, consistency_check, rag_hits_sources
+            )
+        except Exception as e:
+            logger.error(f"Reasoning trace build failed: {e}")
+            return []
+
 
 chat_service = ChatService()

@@ -66,15 +66,26 @@ class DashaApiService:
                 if isinstance(response, dict) and "body" in response:
                     body_value = response["body"]
                     response = json.loads(body_value) if isinstance(body_value, str) else body_value
-
+                
                 if isinstance(response, list):
                     return response
+
                 if isinstance(response, dict) and FEATURE in response:
-                    return response[FEATURE]
+                    feature_value = response[FEATURE]
+                    if isinstance(feature_value, str):
+                        try:
+                            feature_value = json.loads(feature_value)
+                        except json.JSONDecodeError:
+                            logger.error(f"Dasha API '{FEATURE}' value was an unparseable string: {feature_value[:200]}")
+                            return None
+                    if isinstance(feature_value, list):
+                        return feature_value
+                    logger.warning(f"Dasha API '{FEATURE}' value has unexpected type: {type(feature_value)}")
+                    return None
 
                 logger.warning(f"Dasha API returned unexpected shape: {type(response)}")
                 return None
-
+                
             except urllib.error.HTTPError as e:
                 error_body = e.read().decode("utf-8")
                 if 400 <= e.code < 500:

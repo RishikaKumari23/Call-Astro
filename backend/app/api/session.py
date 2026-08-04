@@ -187,4 +187,13 @@ async def get_weekly_guidance(session_id: str):
         return {"available": True, "guidance": guidance}
     except Exception as e:
         logger.error(f"Error generating weekly guidance: {e}")
-        raise HTTPException(status_code=500, detail=str(e))    
+        raise HTTPException(status_code=500, detail=str(e))   
+    
+@router.get("/{session_id}/reasoning-trace")
+async def get_reasoning_trace(session_id: str):
+    """Powers the 'Explain how you reached this' button."""
+    session = db.get_or_create_session(session_id)
+    raw = session.get("last_reasoning_trace")
+    if not raw:
+        return {"available": False, "steps": []}
+    return {"available": True, "steps": json.loads(raw)} 

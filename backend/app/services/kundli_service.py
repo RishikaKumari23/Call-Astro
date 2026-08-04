@@ -201,9 +201,11 @@ class KundliService:
             logger.error(f"Failed to derive dasha inputs: {e}")
             return None
 
-    def summarize_kundli(self, kundli_data: Dict) -> str:
+    def summarize_kundli(self, kundli_data: Dict, dob: Optional[str] = None) -> str:
         """Text summary for the LLM prompt — includes Ascendant, Moon sign,
-        planetary positions, Navamsa ascendant, and full current Dasha chain."""
+        planetary positions, Navamsa ascendant, and current Dasha chain
+        (calculated fallback version — the real-API dasha is layered in
+        separately by chat_service via get_real_or_calculated_dasha)."""
         try:
             lines = []
             positions = kundli_data.get("planetary_positions", [])
@@ -232,21 +234,23 @@ class KundliService:
             if planet_lines:
                 lines.append("Planetary positions: " + ", ".join(planet_lines))
 
-            # Navamsa (D9) Ascendant — used for marriage/spouse-related readings
             chart_positions = kundli_data.get("chart_planet_positions", {})
             d9 = chart_positions.get("D9", {}) if chart_positions else {}
             d9_asc = d9.get("Ascendant", {}).get("sign_name") if d9 else None
             if d9_asc:
                 lines.append(f"Navamsa (D9) Ascendant: {d9_asc}")
 
-            # Current Mahadasha / Antardasha / Pratyantardasha
+            # This is always the CALCULATED fallback dasha (age-based, not real
+            # calendar dates) — get_real_or_calculated_dasha only calls this
+            # method when the real Dasha API failed. Real-API dasha data is
+            # injected separately into the prompt by chat_service, not here.
             dasha_info = self._get_dasha_for_kundli(kundli_data)
             if dasha_info:
                 maha = dasha_info["current_mahadasha"]
                 antar = dasha_info.get("current_antardasha")
                 praty = dasha_info.get("current_pratyantardasha")
 
-                dasha_line = f"Current Dasha Period: Mahadasha={maha['lord']}"
+                dasha_line = f"Current Dasha Period (approximate, calculated): Mahadasha={maha['lord']}"
                 if antar:
                     dasha_line += f", Antardasha={antar['lord']}"
                 if praty:
@@ -255,7 +259,18 @@ class KundliService:
 
                 if len(dasha_info["dasha_sequence"]) > 1:
                     nxt = dasha_info["dasha_sequence"][1]
-                    lines.append(f"Next Mahadasha: {nxt['lord']} (begins at age {nxt['start_year']})")
+                    if dob:
+                        try:
+                            from datetime import datetime as _dt
+                            birth_year = _dt.strptime(dob.strip(), "%d-%m-%Y").year
+                            approx_year = birth_year + int(nxt["start_year"])
+                            lines.append(f"Next Mahadasha: {nxt['lord']} (approx. begins around {approx_year})")
+                        except (ValueError, TypeError):
+                            # Couldn't parse dob — omit rather than show a
+                            # confusing raw "age X.XX" number.
+                            pass
+                    # If no dob was passed in, this line is simply omitted —
+                    # better than showing meaningless raw age numbers.
 
             ascendant_pred = kundli_data.get("ascendant_sign_prediction", "")
             if ascendant_pred:
@@ -272,7 +287,6 @@ class KundliService:
         except Exception as e:
             logger.error(f"Failed to summarize kundli data: {e}")
             return "No structured chart data available."
-
     def extract_chart_data(self, kundli_data: Dict) -> Optional[Dict]:
         """Structured D1 chart data for the frontend visual chart."""
         if not kundli_data:
@@ -350,7 +364,6 @@ class KundliService:
             "D24": self.extract_divisional_chart(kundli_data, "D24"),
         },
         }
-
     def get_real_or_calculated_dasha(self, kundli_data: Dict, dob: str, birth_time_24h: str,
                                        latitude: float, longitude: float) -> Optional[Dict]:
         """Try the REAL dasha API first (actual calendar dates, authoritative).
@@ -359,11 +372,12 @@ class KundliService:
         from app.services.dasha_api_service import dasha_api_service
 
         try:
-            # Convert DD-MM-YYYY (internal format) -> DD/MM/YYYY (API format)
-            date_for_api = dob.replace("-", "/") if dob else None
-            if date_for_api:
+            if dob:
+                # dob is already DD-MM-YYYY — exactly what this Lambda's
+                # dateOfBirth field expects. DO NOT convert to slashes here;
+                # that was the bug that caused this to silently fail before.
                 dasha_tree = dasha_api_service.fetch_dasha_tree(
-                    date=date_for_api, time=birth_time_24h,
+                    date=dob, time=birth_time_24h,
                     latitude=latitude, longitude=longitude,
                 )
                 if dasha_tree:
@@ -374,8 +388,7 @@ class KundliService:
         except Exception as e:
             logger.warning(f"Real dasha API failed, falling back to calculated dasha: {e}")
 
-        # Fallback: hand-calculated version
         logger.info("Falling back to calculated Vimshottari dasha (years-from-birth)")
-        return self._get_dasha_for_kundli(kundli_data)
-
+        return self._get_dasha_for_kundli(kundli_data)    
+    
 kundli_service = KundliService()

@@ -323,3 +323,119 @@ def build_consistency_note(check: Optional[dict], topic: Optional[str]) -> str:
     # "leaning"
     return (f"Signal check for {topic}: One signal (Dasha or chart) leans positive/negative, the other is neutral. "
             f"You may lean toward that direction but keep slightly softer certainty than a fully aligned reading.")
+    
+    # ---------------------------------------------------------------------------
+# Explainable AI — Step-by-Step Reasoning Trace
+# ---------------------------------------------------------------------------
+def build_reasoning_trace(
+    topic: Optional[str],
+    ascendant_sign: Optional[str],
+    planets: List[dict],
+    dasha_info: Optional[dict],
+    consistency_check: Optional[dict],
+    rag_sources: Optional[List[str]] = None,
+) -> List[dict]:
+    """Assemble a numbered, inspectable reasoning chain from data already
+    computed elsewhere in the pipeline. Each step is {step, title, detail} —
+    purely structural, no LLM call, so it's fast and 100% traceable to real
+    inputs rather than an LLM's self-report of its own reasoning."""
+    if not topic or not ascendant_sign:
+        return []
+
+    steps = []
+    step_num = 1
+
+    # Step 1 — current timing
+    if dasha_info:
+        maha = dasha_info.get("current_mahadasha", {})
+        antar = dasha_info.get("current_antardasha", {})
+        detail = f"Mahadasha: {maha.get('lord', 'Unknown')}"
+        if antar:
+            detail += f", Antardasha: {antar.get('lord', 'Unknown')}"
+        steps.append({"step": step_num, "title": "Current Dasha Period", "detail": detail})
+        step_num += 1
+
+    # Step 2 — relevant house
+    config = TOPIC_CHART_FACTORS.get(topic, {})
+    house_num = config.get("house")
+    if house_num:
+        house_sign = get_sign_for_house(house_num, ascendant_sign)
+        house_lord = get_house_lord(house_num, ascendant_sign)
+        detail = f"{house_num}th House governs {topic}"
+        if house_sign:
+            detail += f" — occupied by {house_sign}"
+        if house_lord:
+            detail += f", ruled by {house_lord}"
+        steps.append({"step": step_num, "title": f"Relevant House ({house_num}th)", "detail": detail})
+        step_num += 1
+
+    # Step 3 — significator planets and their placement
+    sig_planets = config.get("planets", [])
+    if sig_planets and planets:
+        placements = []
+        for pname in sig_planets:
+            match = next((p for p in planets if p.get("name") == pname), None)
+            if match:
+                sign = match.get("sign_name", "")
+                house = get_house_for_sign(sign, ascendant_sign)
+                retro = " (retrograde)" if str(match.get("isRetro", "")).lower() == "true" else ""
+                placements.append(f"{pname} in {sign} ({house}th house){retro}")
+        if placements:
+            steps.append({
+                "step": step_num, "title": "Significator Planets",
+                "detail": "; ".join(placements)
+            })
+            step_num += 1
+
+    # Step 4 — divisional chart used
+    div_chart = config.get("divisional_chart")
+    if div_chart:
+        purpose_map = {"D9": "marriage", "D10": "career", "D24": "education", "D7": "children"}
+        steps.append({
+            "step": step_num, "title": "Divisional Chart Consulted",
+            "detail": f"{div_chart} chart (used specifically for {purpose_map.get(div_chart, topic)} analysis)"
+        })
+        step_num += 1
+
+    # Step 5 — consistency/signal check
+    if consistency_check:
+        alignment = consistency_check.get("alignment")
+        alignment_labels = {
+            "aligned_positive": "Dasha timing and chart placement both support a favorable reading",
+            "aligned_negative": "Dasha timing and chart placement both indicate challenges",
+            "mixed": "Dasha timing and chart placement point in different directions — genuine mixed signals",
+            "leaning": "One signal (Dasha or chart) leans in a direction, the other is neutral",
+        }
+        steps.append({
+            "step": step_num, "title": "Signal Consistency Check",
+            "detail": alignment_labels.get(alignment, "Signals evaluated")
+        })
+        step_num += 1
+
+    # Step 6 — classical sources referenced
+    if rag_sources:
+        unique_sources = list(dict.fromkeys(rag_sources))[:3]  # dedupe, cap at 3
+        steps.append({
+            "step": step_num, "title": "Classical References Consulted",
+            "detail": ", ".join(unique_sources)
+        })
+        step_num += 1
+
+    return steps
+
+
+def format_reasoning_trace_text(steps: List[dict], language: str = "Hinglish") -> str:
+    """Render the trace as readable text for display (not for the LLM prompt —
+    this is shown directly in the UI when the user clicks 'Explain this')."""
+    if not steps:
+        labels = {
+            "English": "No detailed reasoning trace available for this response.",
+            "Hindi": "इस उत्तर के लिए विस्तृत तर्क उपलब्ध नहीं है।",
+            "Hinglish": "Is jawab ke liye detailed reasoning available nahi hai.",
+        }
+        return labels.get(language, labels["Hinglish"])
+
+    lines = []
+    for s in steps:
+        lines.append(f"{s['step']}. {s['title']}\n   {s['detail']}")
+    return "\n\n".join(lines)
