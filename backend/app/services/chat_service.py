@@ -528,13 +528,20 @@ class ChatService:
             
             db.add_message(session_id, "assistant", full_text)
 
-            if is_astrology and not missing_fields:
-                try:
-                    trace = self._build_reasoning_trace(session, topic, rag_sources)
-                    db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
-                except Exception as trace_err:
-                    logger.error(f"Reasoning trace caching failed: {trace_err}")
+             
+            logger.info(f"DEBUG trace-gate: is_astrology={is_astrology}, missing_fields={missing_fields}, topic={topic}")
 
+            if is_astrology and not missing_fields:
+             try:
+               trace = self._build_reasoning_trace(session, topic, rag_sources)
+               logger.info(f"DEBUG trace built: {len(trace)} steps")
+               db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
+             except Exception as trace_err:
+               logger.error(f"Reasoning trace caching failed: {trace_err}")
+            else:
+              logger.info("DEBUG trace-gate: SKIPPED — is_astrology or missing_fields blocked it") 
+            
+             
             suggestions = []
             if full_text and len(full_text) > 20:
                 try:
