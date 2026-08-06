@@ -41,6 +41,8 @@ class MemoryDatabase:
                     dashboard_prediction TEXT,
                     dashboard_lucky_color TEXT,
                     dashboard_date TEXT,
+                    weekly_guidance TEXT,
+                    weekly_week_start TEXT,
                     latitude REAL,
                     longitude REAL,
                     updated_at TEXT
@@ -63,6 +65,8 @@ class MemoryDatabase:
                 ("dashboard_prediction", "TEXT"),
                 ("dashboard_lucky_color", "TEXT"),
                 ("dashboard_date", "TEXT"),
+                ("weekly_guidance", "TEXT"),
+                ("weekly_week_start", "TEXT"),
             ]:
                 if col_name not in existing_cols:
                     cursor.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_type}")
@@ -120,12 +124,14 @@ class MemoryDatabase:
             "dob", "birth_time", "birth_place", "gender", "name", "language",
             "latitude", "longitude", "pending_field", "kundli_data", "kundli_raw", "kundli_dasha",
             "kundli_divisional", "kundli_full_raw", "topic_memory", "last_reasoning_trace",
-            "dashboard_prediction", "dashboard_lucky_color", "dashboard_date"
+            "dashboard_prediction", "dashboard_lucky_color", "dashboard_date",
+            "weekly_guidance", "weekly_week_start"
         }
         nullable_ok = {
             "pending_field", "kundli_data", "kundli_raw", "kundli_dasha", "kundli_divisional",
             "kundli_full_raw", "topic_memory", "last_reasoning_trace",
-            "dashboard_prediction", "dashboard_lucky_color", "dashboard_date"
+            "dashboard_prediction", "dashboard_lucky_color", "dashboard_date",
+            "weekly_guidance", "weekly_week_start"
         }
         fields_to_update = {
             k: v for k, v in updates.items()
@@ -167,5 +173,13 @@ class MemoryDatabase:
             )
             rows = cursor.fetchall()
             return [dict(row) for row in rows][-limit:]
+
+    def clear_history(self, session_id: str):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            cursor.execute("UPDATE sessions SET topic_memory = NULL, updated_at = ? WHERE session_id = ?", 
+                           (datetime.utcnow().isoformat(), session_id))
+            conn.commit()
 
 db = MemoryDatabase()

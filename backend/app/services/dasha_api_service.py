@@ -76,7 +76,7 @@ class DashaApiService:
                         try:
                             feature_value = json.loads(feature_value)
                         except json.JSONDecodeError:
-                            logger.error(f"Dasha API '{FEATURE}' value was an unparseable string: {feature_value[:200]}")
+                            logger.error(f"Dasha API '{FEATURE}' value was an unparseable string: {str(feature_value)[:200]}")
                             return None
                     if isinstance(feature_value, list):
                         return feature_value
@@ -115,7 +115,7 @@ class DashaApiService:
             return None
 
         current_antar = None
-        for antar in current_maha.get("antardasha", []):
+        for antar in current_maha.get("antardashas", []):
             antar_start = _parse_dt(antar.get("start", ""))
             antar_end = _parse_dt(antar.get("end", ""))
             if antar_start and antar_end and antar_start <= now <= antar_end:
@@ -170,7 +170,7 @@ class DashaApiService:
                     "end": maha.get("end"),
                 })
                 continue
-            for antar in maha.get("antardasha", []):
+            for antar in maha.get("antardashas", []):
                 antar_lord = antar.get("antardasha") or antar.get("antardasha_display")
                 flat.append({
                     "mahadasha": maha_lord,

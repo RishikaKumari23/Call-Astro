@@ -16,15 +16,19 @@ TOPIC_CHART_FACTORS = {
         "divisional_chart": "D9",
     },
     "health": {
-        "house": 6, "planets": ["Saturn", "Mars"],
-        "keywords": ["health", "sehat", "illness", "disease", "body"],
-        "search_bias": "health disease 6th house Saturn Mars",
+        # 1st house (Lagna) = physical body & vitality — primary health indicator.
+        # 6th house governs disease specifically; both are checked via search_bias.
+        "house": 1, "planets": ["Saturn", "Mars", "Moon"],
+        "keywords": ["health", "sehat", "illness", "disease", "body", "bimari"],
+        "search_bias": "health disease 1st house 6th house Lagna Saturn Mars Moon",
         "divisional_chart": None,
     },
     "finance": {
-        "house": 2, "planets": ["Jupiter", "Venus"],
-        "keywords": ["money", "finance", "paisa", "wealth", "income", "dhan"],
-        "search_bias": "wealth money finance 2nd house 11th house Jupiter Venus",
+        # 11th house = income & gains (what people usually mean by "finance").
+        # 2nd house = accumulated wealth/savings — covered in search_bias.
+        "house": 11, "planets": ["Jupiter", "Venus", "Mercury"],
+        "keywords": ["money", "finance", "paisa", "wealth", "income", "dhan", "paise"],
+        "search_bias": "wealth money finance income gains 2nd house 11th house Jupiter Venus Mercury",
         "divisional_chart": None,
     },
     "education": {
@@ -79,9 +83,14 @@ TOPIC_RELEVANT_BOOKS = {
     ],
 }
 NATURAL_BENEFICS = {"Jupiter", "Venus", "Mercury", "Moon"}
-NATURAL_MALEFICS = {"Saturn", "Mars", "Rahu", "Ketu", "Sun"}
+# Sun is NOT a universal malefic in Jyotish — it is a functional benefic for many
+# ascendants (e.g. Leo, Aries, Scorpio). Treating it as neutral avoids incorrect
+# consistency scores across different Lagnas.
+NATURAL_MALEFICS = {"Saturn", "Mars", "Rahu", "Ketu"}
 
-KENDRA_TRIKONA_HOUSES = {1, 4, 5, 7, 9, 10, 11}   # strong/supportive houses
+# Kendra houses: 1, 4, 7, 10 | Trikona houses: 1, 5, 9
+# House 11 is an Upachaya (growth) house, NOT a Kendra or Trikona.
+KENDRA_TRIKONA_HOUSES = {1, 4, 5, 7, 9, 10}       # strong/supportive houses
 DUSTHANA_HOUSES = {6, 8, 12}                       # weak/challenging houses
 
 def classify_topic(message: str) -> Optional[str]:
@@ -92,6 +101,119 @@ def classify_topic(message: str) -> Optional[str]:
             if kw in text_lower:
                 return topic
     return None
+
+
+# Pre-defined instant follow-up suggestions per topic.
+# These replace the slow Ollama second-call which was timing out at 120s.
+TOPIC_SUGGESTIONS = {
+    "marriage": [
+        "Which gemstone should I wear to attract the right partner?",
+        "When is the best time for my marriage according to my Dasha?",
+        "How is my 7th house lord placed in my chart?",
+    ],
+    "career": [
+        "Which gemstone strengthens my career planet?",
+        "When will my career growth peak in the next 2 years?",
+        "Is my 10th house strong for a government job?",
+    ],
+    "finance": [
+        "Which stone or remedy can improve my financial luck?",
+        "When will my income increase according to my Dasha?",
+        "How is my 11th house placed for gains?",
+    ],
+    "health": [
+        "Which gemstone or remedy improves my vitality?",
+        "Which planet is affecting my health the most right now?",
+        "How does my current Dasha affect my physical strength?",
+    ],
+    "education": [
+        "Which gemstone improves concentration and memory?",
+        "Is my chart strong for higher education or abroad studies?",
+        "When is the best period to appear for exams?",
+    ],
+}
+
+DEFAULT_SUGGESTIONS = [
+    "Which gemstone is lucky for me?",
+    "How is my current Dasha period overall?",
+    "What does my Lagna (Ascendant) say about my personality?",
+]
+
+
+def get_instant_suggestions(topic: Optional[str], language: str = "English") -> list:
+    """Returns instant follow-up suggestions based on the detected topic.
+    No LLM call needed — responses are immediate."""
+    suggestions = TOPIC_SUGGESTIONS.get(topic, DEFAULT_SUGGESTIONS) if topic else DEFAULT_SUGGESTIONS
+
+    if language == "Hinglish":
+        hinglish_map = {
+            "marriage": [
+                "Sahi partner ke liye kaunsa gemstone pehnu?",
+                "Mere Dasha ke hisaab se shaadi kab hogi?",
+                "Mera 7th house kaisa hai?",
+            ],
+            "career": [
+                "Career ke liye kaunsa gemstone sahi rahega?",
+                "Agli 2 saalon mein career growth kab hogi?",
+                "Sarkari naukri ke liye mera 10th house kaisa hai?",
+            ],
+            "finance": [
+                "Paisa badhane ke liye kaunsa stone ya upay karoon?",
+                "Mere Dasha mein income kab badhegi?",
+                "Mera 11th house gains ke liye kaisa hai?",
+            ],
+            "health": [
+                "Sehat ke liye kaunsa gemstone ya upay sahi hai?",
+                "Abhi kaun sa planet meri health affect kar raha hai?",
+                "Meri current Dasha body strength pe kaisa asar kar rahi hai?",
+            ],
+            "education": [
+                "Concentration ke liye kaunsa gemstone sahi hai?",
+                "Mera chart higher education ya abroad ke liye kaisa hai?",
+                "Exam ke liye best time kaunsa hai?",
+            ],
+        }
+        return hinglish_map.get(topic, [
+            "Mere liye kaunsa gemstone lucky hai?",
+            "Meri current Dasha overall kaisi hai?",
+            "Mera Lagna (Ascendant) kya kehta hai?",
+        ])
+
+    if language == "Hindi":
+        hindi_map = {
+            "marriage": [
+                "सही जीवनसाथी के लिए कौन सा रत्न पहनूं?",
+                "मेरी दशा के अनुसार विवाह कब होगा?",
+                "मेरा सप्तम भाव कैसा है?",
+            ],
+            "career": [
+                "करियर के लिए कौन सा रत्न सही रहेगा?",
+                "अगले 2 वर्षों में करियर विकास कब होगा?",
+                "सरकारी नौकरी के लिए मेरा दशम भाव कैसा है?",
+            ],
+            "finance": [
+                "धन वृद्धि के लिए कौन सा रत्न या उपाय करूं?",
+                "मेरी दशा में आय कब बढ़ेगी?",
+                "मेरा एकादश भाव लाभ के लिए कैसा है?",
+            ],
+            "health": [
+                "स्वास्थ्य के लिए कौन सा रत्न या उपाय उचित है?",
+                "अभी कौन सा ग्रह मेरे स्वास्थ्य को प्रभावित कर रहा है?",
+                "वर्तमान दशा शारीरिक शक्ति पर कैसा प्रभाव डाल रही है?",
+            ],
+            "education": [
+                "एकाग्रता के लिए कौन सा रत्न उचित है?",
+                "उच्च शिक्षा या विदेश के लिए मेरी कुंडली कैसी है?",
+                "परीक्षा के लिए सर्वोत्तम समय कौन सा है?",
+            ],
+        }
+        return hindi_map.get(topic, [
+            "मेरे लिए कौन सा रत्न भाग्यशाली है?",
+            "मेरी वर्तमान दशा कैसी है?",
+            "मेरा लग्न (Ascendant) क्या कहता है?",
+        ])
+
+    return suggestions
 
 
 def get_house_for_sign(sign_name: str, ascendant_sign: str) -> Optional[int]:
@@ -488,3 +610,64 @@ def format_dasha_timeline_for_prompt(upcoming_periods: List[dict], favorable_per
             lines.append(f"- {maha}/{antar}: starting {start} (strong match for this question)")
 
     return "\n".join(lines)
+    
+# ---------------------------------------------------------------------------
+# Missing Evidence Detector — checks what data the system actually has for
+# this topic before the LLM generates a response, so the prompt can be
+# honest about gaps instead of the model silently filling them in.
+# ---------------------------------------------------------------------------
+def build_missing_evidence_note(
+    topic: Optional[str],
+    planets: List[dict],
+    ascendant_sign: Optional[str],
+    dasha_info: Optional[dict],
+    divisional_text: str,
+) -> str:
+    """Returns an instruction block listing what evidence IS and ISN'T
+    available for this topic, so the LLM can be transparent about
+    confidence rather than presenting a full-confidence answer built on
+    partial data."""
+    if not topic:
+        return ""
+
+    config = TOPIC_CHART_FACTORS.get(topic)
+    if not config:
+        return ""
+
+    available = []
+    missing = []
+
+    house_num = config["house"]
+    house_lord = get_house_lord(house_num, ascendant_sign) if ascendant_sign else None
+    if house_lord and any(p.get("name") == house_lord for p in planets):
+        available.append(f"{house_num}th House lord ({house_lord}) placement")
+    else:
+        missing.append(f"{house_num}th House lord placement")
+
+    for planet_name in config.get("planets", []):
+        if any(p.get("name") == planet_name for p in planets):
+            available.append(f"{planet_name} placement")
+        else:
+            missing.append(f"{planet_name} placement")
+
+    if config.get("divisional_chart"):
+        if divisional_text:
+            available.append(f"{config['divisional_chart']} divisional chart")
+        else:
+            missing.append(f"{config['divisional_chart']} divisional chart")
+
+    if dasha_info and dasha_info.get("current_mahadasha"):
+        available.append("Current Dasha timing")
+    else:
+        missing.append("Current Dasha timing")
+
+    if not missing:
+        return f"Evidence check for {topic}: Full evidence available ({', '.join(available)}). Speak with normal confidence."
+
+    return (
+        f"Evidence check for {topic}: Available — {', '.join(available) or 'none'}. "
+        f"Missing — {', '.join(missing)}. "
+        f"Where evidence is missing, do not invent specifics for it — either omit that angle "
+        f"entirely or speak in slightly more general terms for that part only, while still "
+        f"staying confident about what IS available."
+    )    

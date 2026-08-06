@@ -18,35 +18,59 @@ class DocumentIndexer:
 
     def extract_docx_text(self, file_path: str) -> str:
         try:
-            with zipfile.ZipFile(file_path) as docx:
-                xml_content = docx.read('word/document.xml')
-                root = ET.fromstring(xml_content)
-                namespaces = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-                paragraphs = []
-                for p in root.findall('.//w:p', namespaces):
-                    texts = [t.text for t in p.findall('.//w:t', namespaces) if t.text]
-                    if texts:
-                        paragraphs.append("".join(texts))
-                return "\n".join(paragraphs)
+            import docx
+        except ImportError:
+            logger.error("python-docx package is not installed. DOCX extraction will be skipped.")
+            raise RuntimeError("python-docx package is required for indexing DOCX documents. Please run 'pip install python-docx'.")
+
+        try:
+            doc = docx.Document(file_path)
+            content = []
+            for element in doc.element.body:
+                if element.tag.endswith('p'):
+                    p = docx.text.paragraph.Paragraph(element, doc)
+                    if p.text.strip():
+                        content.append(p.text)
+                elif element.tag.endswith('tbl'):
+                    table = docx.table.Table(element, doc)
+                    for i, row in enumerate(table.rows):
+                        row_data = [cell.text.replace("\n", " ").strip() for cell in row.cells]
+                        content.append("| " + " | ".join(row_data) + " |")
+                        if i == 0:
+                            content.append("|" + "|".join(["---"] * len(row.cells)) + "|")
+                    content.append("")
+            return "\n".join(content)
         except Exception as e:
             logger.error(f"Error parsing DOCX file {file_path}: {e}")
             raise
 
     def extract_pdf_text(self, file_path: str) -> str:
         try:
-            import pypdf
+            import fitz
         except ImportError:
-            logger.error("pypdf package is not installed. PDF extraction will be skipped.")
-            raise RuntimeError("pypdf package is required for indexing PDF documents. Please run 'pip install pypdf'.")
+            logger.error("PyMuPDF package is not installed. PDF extraction will be skipped.")
+            raise RuntimeError("PyMuPDF package is required for indexing PDF documents. Please run 'pip install PyMuPDF'.")
 
         try:
-            reader = pypdf.PdfReader(file_path)
-            text = []
-            for i, page in enumerate(reader.pages):
-                page_text = page.extract_text()
+            doc = fitz.open(file_path)
+            content = []
+            for page in doc:
+                page_text = page.get_text()
                 if page_text:
-                    text.append(page_text)
-            return "\n".join(text)
+                    content.append(page_text)
+                
+                tables = page.find_tables()
+                if tables:
+                    for table in tables:
+                        table_data = table.extract()
+                        if not table_data: continue
+                        for i, row in enumerate(table_data):
+                            row_clean = [str(cell).replace("\n", " ").strip() if cell is not None else "" for cell in row]
+                            content.append("| " + " | ".join(row_clean) + " |")
+                            if i == 0:
+                                content.append("|" + "|".join(["---"] * len(row)) + "|")
+                        content.append("")
+            return "\n".join(content)
         except Exception as e:
             logger.error(f"Error parsing PDF file {file_path}: {e}")
             raise

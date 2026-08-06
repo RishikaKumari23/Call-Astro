@@ -169,6 +169,8 @@ async def update_session_info(session_id: str, profile_update: dict):
             else:
                 logger.warning(f"Could not geocode birth_place: {profile_update['birth_place']}")
 
+        language_changed = "language" in profile_update
+
         if birth_fields_changed:
             profile_update["kundli_data"] = None
             profile_update["kundli_raw"] = None
@@ -181,6 +183,13 @@ async def update_session_info(session_id: str, profile_update: dict):
             profile_update["topic_memory"] = None
             profile_update["last_reasoning_trace"] = None
             logger.info(f"Birth details changed for {session_id} — cleared all cached derived data")
+        elif language_changed:
+            profile_update["dashboard_prediction"] = None
+            profile_update["dashboard_date"] = None
+            profile_update["weekly_guidance"] = None
+            profile_update["weekly_week_start"] = None
+            profile_update["last_reasoning_trace"] = None
+            logger.info(f"Language changed for {session_id} — cleared dashboard and guidance cache")
 
         updated = db.update_session(session_id, profile_update)
 

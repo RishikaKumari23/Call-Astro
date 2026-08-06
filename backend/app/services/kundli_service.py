@@ -377,5 +377,4 @@ class KundliService:
         logger.info("Falling back to calculated Vimshottari dasha (years-from-birth)")
         return self._get_dasha_for_kundli(kundli_data)
 
-
 kundli_service = KundliService()

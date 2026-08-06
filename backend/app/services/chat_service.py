@@ -10,13 +10,14 @@ from app.rag.embeddings import EmbeddingsProvider
 from app.prompts.templates import ASTROLOGER_PROMPT, MISSING_INFO_PROMPT
 from app.config.settings import settings
 from app.utils.logger import logger
+
 from app.services.topic_service import (
     classify_topic, build_topic_emphasis, get_search_bias,
-    build_explanation_footer, TOPIC_CHART_FACTORS
+    build_explanation_footer, TOPIC_CHART_FACTORS, get_instant_suggestions
 )
 from app.services.dasha_api_service import dasha_api_service
 from app.services.topic_service import classify_topic, rank_favorable_periods, format_dasha_timeline_for_prompt
-
+from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
 
 class ChatService:
     def __init__(self):
@@ -149,11 +150,10 @@ class ChatService:
             return ""
     
     
-
-    def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str) -> str:
-        parts = [p for p in [kundli_str, topic_emphasis, divisional_text] if p]
+    def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str, yoga_text: str, missing_evidence: str="" ) -> str:
+        parts = [p for p in [kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence] if p]
         return "\n\n".join(parts)
-
+   
     # ------------------------------------------------------------------
     # Session-scoped topic memory — lives on sessions.topic_memory, so it
     # is automatically wiped the instant Reset Chat deletes the session row.
@@ -299,8 +299,30 @@ class ChatService:
             if is_astrology and not missing_fields and topic:
                 topic_emphasis = self._get_topic_emphasis(session, topic)
                 divisional_text = self._get_divisional_chart_text(session_id, session, topic)
-            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text)
-
+            
+            yoga_text = ""
+            if is_astrology and not missing_fields:
+             try:
+              cached_raw = session.get("kundli_raw")
+              if cached_raw:
+                parsed = json.loads(cached_raw)
+                planets = parsed.get("planets", [])
+                ascendant_sign = parsed.get("ascendant_sign")
+                if planets and ascendant_sign:
+                 yogas = detect_yogas(planets, ascendant_sign)
+                 yoga_text = format_yogas_for_prompt(yogas)
+             except Exception as yoga_err:
+               logger.error(f"Yoga detection failed: {yoga_err}")
+               
+            
+            missing_evidence = ""
+            if is_astrology and not missing_fields:
+                missing_evidence = self._get_missing_evidence_note(session, topic, divisional_text)
+            
+                        
+            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)   
+            
+            
             user_memory = ""
             consistency_note = ""
             if is_astrology and not missing_fields:
@@ -327,6 +349,7 @@ class ChatService:
                                 ascendant_data=ascendant_data,
                             )
                             if dasha_tree:
+                                logger.info(f"DEBUG dasha_tree sample: {json.dumps(dasha_tree[:1], default=str)[:500]}")
                                 upcoming = dasha_api_service.get_upcoming_periods(dasha_tree, months_ahead=60)
                                 favorable = rank_favorable_periods(upcoming, topic)
                                 dasha_timeline_str = format_dasha_timeline_for_prompt(upcoming, favorable, language)
@@ -468,8 +491,28 @@ class ChatService:
             if is_astrology and not missing_fields and topic:
                 topic_emphasis = self._get_topic_emphasis(session, topic)
                 divisional_text = self._get_divisional_chart_text(session_id, session, topic)
-            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text)
+        
+            yoga_text = ""
+            if is_astrology and not missing_fields:
+                try:
+                    cached_raw = session.get("kundli_raw")
+                    if cached_raw:
+                        parsed = json.loads(cached_raw)
+                        planets = parsed.get("planets", [])
+                        ascendant_sign = parsed.get("ascendant_sign")
+                        if planets and ascendant_sign:
+                            yogas = detect_yogas(planets, ascendant_sign)
+                            yoga_text = format_yogas_for_prompt(yogas)
+                except Exception as yoga_err:
+                    logger.error(f"Yoga detection failed: {yoga_err}")
+            
+            missing_evidence = ""
+            if is_astrology and not missing_fields:
+                missing_evidence = self._get_missing_evidence_note(session, topic, divisional_text)
 
+            
+            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
+            
             user_memory = ""
             consistency_note = ""
             if is_astrology and not missing_fields:
@@ -495,6 +538,7 @@ class ChatService:
                                 ascendant_data=ascendant_data,
                             )
                             if dasha_tree:
+                                logger.info(f"DEBUG dasha_tree sample: {json.dumps(dasha_tree[:1], default=str)[:500]}")
                                 upcoming = dasha_api_service.get_upcoming_periods(dasha_tree, months_ahead=60)
                                 favorable = rank_favorable_periods(upcoming, topic)
                                 dasha_timeline_str = format_dasha_timeline_for_prompt(upcoming, favorable, language)
@@ -506,6 +550,7 @@ class ChatService:
             
             
             astrologer_prompt = ASTROLOGER_PROMPT.format(
+                name=session.get("name") or "Friend",
                 language=language, dob=session.get("dob") or "Not provided",
                 birth_time=session.get("birth_time") or "Not provided",
                 birth_place=session.get("birth_place") or "Not provided",
@@ -539,16 +584,10 @@ class ChatService:
              except Exception as trace_err:
                logger.error(f"Reasoning trace caching failed: {trace_err}")
             else:
-              logger.info("DEBUG trace-gate: SKIPPED — is_astrology or missing_fields blocked it") 
-            
-             
-            suggestions = []
-            if full_text and len(full_text) > 20:
-                try:
-                    suggestions = llm_service.generate_followups(full_text, language)
-                except Exception as followup_err:
-                    logger.error(f"Follow-up suggestion generation failed: {followup_err}")
-                    suggestions = []
+              logger.info("DEBUG trace-gate: SKIPPED — is_astrology or missing_fields blocked it")
+
+            # Instant topic-based suggestions — no second LLM call needed
+            suggestions = get_instant_suggestions(topic, language)
 
             yield {"type": "done", "session_id": session_id, "message": full_text,
                    "dob": session.get("dob"), "birth_time": session.get("birth_time"),
@@ -637,5 +676,21 @@ class ChatService:
                 return None
         return None
 
+    def _get_missing_evidence_note(self, session: Dict, topic: Optional[str], divisional_text: str) -> str:
+        try:
+            cached_raw = session.get("kundli_raw")
+            cached_dasha = session.get("kundli_dasha")
+            if not cached_raw:
+                return ""
+            parsed = json.loads(cached_raw)
+            planets = parsed.get("planets", [])
+            ascendant_sign = parsed.get("ascendant_sign")
+            dasha_info = json.loads(cached_dasha) if cached_dasha else None
+
+            from app.services.topic_service import build_missing_evidence_note
+            return build_missing_evidence_note(topic, planets, ascendant_sign, dasha_info, divisional_text)
+        except Exception as e:
+            logger.error(f"Missing evidence check failed: {e}")
+            return ""
 
 chat_service = ChatService()
