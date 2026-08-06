@@ -21,14 +21,7 @@ Extract the following fields from the user's message and history:
    Examples: "Lucknow", "Mumbai", "Hardol", "Delhi"
    If NOT found, return null.
 
-4. 4. "language": Detect the language.
-
-- If the message is entirely in English, return "English".
-- If the message is entirely in Hindi, return "Hindi".
-- Return "Hinglish" only if the message genuinely mixes English and Hindi.
-- If unsure, default to "English".
-
-5. "is_astrology_query": Boolean. Is the user asking about astrology/predictions? (marriage, career, finance, future, etc.)
+4. "is_astrology_query": Boolean. Is the user asking about astrology/predictions? (marriage, career, finance, future, etc.)
 
 Output ONLY valid JSON. No explanations, no markdown (```), no extra text. Just the JSON object.
 

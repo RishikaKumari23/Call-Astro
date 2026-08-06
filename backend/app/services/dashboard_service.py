@@ -55,7 +55,7 @@ def generate_daily_prediction(kundli_summary: str, language: str) -> Optional[st
 
 
 WEEKLY_GUIDANCE_PROMPT = """You are a warm, experienced Indian Vedic Astrologer writing a short weekly
-reflection for a client, based on their birth chart and current planetary period (Dasha).
+reflection for your client {name}, based on their birth chart and current planetary period (Dasha).
 
 Rules:
 1. Respond in {language}.
@@ -66,6 +66,7 @@ Rules:
 4. Frame this as general weekly guidance for reflection, not a precise prediction.
 5. Do NOT mention specific numeric scores or exact dates/times.
 6. Do NOT reference any technical process.
+7. Address the client by their name {name} naturally.
 
 Birth Chart Summary:
 {kundli_summary}
@@ -78,7 +79,7 @@ This Week's Date Range: {week_start} to {week_end}
 Write this week's short reflection:
 """
 
-def generate_weekly_guidance(kundli_summary: str, dasha_summary: str, language: str) -> Optional[str]:
+def generate_weekly_guidance(kundli_summary: str, dasha_summary: str, language: str, name: str) -> Optional[str]:
     """Weekly reflection grounded in natal chart + current REAL dasha period.
     Returns None on failure — caller should not cache a failed generation."""
     try:
@@ -87,6 +88,7 @@ def generate_weekly_guidance(kundli_summary: str, dasha_summary: str, language: 
         week_end = (today + timedelta(days=6)).strftime("%d %b")
 
         prompt = WEEKLY_GUIDANCE_PROMPT.format(
+            name=name or "Client",
             language=language,
             kundli_summary=kundli_summary or "No chart data available.",
             dasha_summary=dasha_summary or "No dasha data available.",

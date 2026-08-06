@@ -131,7 +131,7 @@ async def get_weekly_guidance(session_id: str):
                 if antar:
                     dasha_summary += f", Antardasha: {antar.get('lord')}"
 
-        guidance = generate_weekly_guidance(kundli_summary, dasha_summary, session.get("language", "Hinglish"))
+        guidance = generate_weekly_guidance(kundli_summary, dasha_summary, session.get("language", "Hinglish"), session.get("name", "Client"))
 
         if guidance is None:
             logger.warning(f"Weekly guidance generation failed for session {session_id} — not caching")

@@ -437,9 +437,6 @@ class ChatService:
                     if extracted.get(key):
                         updates[key] = extracted[key]
                         session[key] = extracted[key]
-                if extracted.get("language"):
-                    updates["language"] = extracted["language"]
-                    session["language"] = extracted["language"]
                 if updates:
                     db.update_session(session_id, updates)
 
