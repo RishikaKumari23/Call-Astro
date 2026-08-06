@@ -8,8 +8,10 @@ from app.utils.logger import logger
 
 DATE_FORMAT = "%d/%m/%Y %H:%M:%S"
 
+import os
+
 DASHA_LAMBDA_URL = "https://bivrov2febq5ued37psv2hcxyi0wlxet.lambda-url.ap-south-1.on.aws/"
-DASHA_LAMBDA_BEARER_TOKEN = "f83c6105-1731-4cd9-9d94-9543ff01bfe1"
+DASHA_LAMBDA_BEARER_TOKEN = os.environ.get("DASHA_LAMBDA_BEARER_TOKEN", "f83c6105-1731-4cd9-9d94-9543ff01bfe1") # Fallback for now to not break anything
 
 # Confirmed working value — casing matters ("Mahadasha", not "MahaDasha").
 FEATURE = "Mahadasha"
