@@ -488,3 +488,64 @@ def format_dasha_timeline_for_prompt(upcoming_periods: List[dict], favorable_per
             lines.append(f"- {maha}/{antar}: starting {start} (strong match for this question)")
 
     return "\n".join(lines)
+    
+# ---------------------------------------------------------------------------
+# Missing Evidence Detector — checks what data the system actually has for
+# this topic before the LLM generates a response, so the prompt can be
+# honest about gaps instead of the model silently filling them in.
+# ---------------------------------------------------------------------------
+def build_missing_evidence_note(
+    topic: Optional[str],
+    planets: List[dict],
+    ascendant_sign: Optional[str],
+    dasha_info: Optional[dict],
+    divisional_text: str,
+) -> str:
+    """Returns an instruction block listing what evidence IS and ISN'T
+    available for this topic, so the LLM can be transparent about
+    confidence rather than presenting a full-confidence answer built on
+    partial data."""
+    if not topic:
+        return ""
+
+    config = TOPIC_CHART_FACTORS.get(topic)
+    if not config:
+        return ""
+
+    available = []
+    missing = []
+
+    house_num = config["house"]
+    house_lord = get_house_lord(house_num, ascendant_sign) if ascendant_sign else None
+    if house_lord and any(p.get("name") == house_lord for p in planets):
+        available.append(f"{house_num}th House lord ({house_lord}) placement")
+    else:
+        missing.append(f"{house_num}th House lord placement")
+
+    for planet_name in config.get("planets", []):
+        if any(p.get("name") == planet_name for p in planets):
+            available.append(f"{planet_name} placement")
+        else:
+            missing.append(f"{planet_name} placement")
+
+    if config.get("divisional_chart"):
+        if divisional_text:
+            available.append(f"{config['divisional_chart']} divisional chart")
+        else:
+            missing.append(f"{config['divisional_chart']} divisional chart")
+
+    if dasha_info and dasha_info.get("current_mahadasha"):
+        available.append("Current Dasha timing")
+    else:
+        missing.append("Current Dasha timing")
+
+    if not missing:
+        return f"Evidence check for {topic}: Full evidence available ({', '.join(available)}). Speak with normal confidence."
+
+    return (
+        f"Evidence check for {topic}: Available — {', '.join(available) or 'none'}. "
+        f"Missing — {', '.join(missing)}. "
+        f"Where evidence is missing, do not invent specifics for it — either omit that angle "
+        f"entirely or speak in slightly more general terms for that part only, while still "
+        f"staying confident about what IS available."
+    )    

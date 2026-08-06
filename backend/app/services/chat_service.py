@@ -10,6 +10,7 @@ from app.rag.embeddings import EmbeddingsProvider
 from app.prompts.templates import ASTROLOGER_PROMPT, MISSING_INFO_PROMPT
 from app.config.settings import settings
 from app.utils.logger import logger
+
 from app.services.topic_service import (
     classify_topic, build_topic_emphasis, get_search_bias,
     build_explanation_footer, TOPIC_CHART_FACTORS
@@ -149,8 +150,8 @@ class ChatService:
             return ""
     
     
-    def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str, yoga_text: str = "") -> str:
-        parts = [p for p in [kundli_str, topic_emphasis, divisional_text, yoga_text] if p]
+    def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str, yoga_text: str, missing_evidence: str="" ) -> str:
+        parts = [p for p in [kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence] if p]
         return "\n\n".join(parts)
    
     # ------------------------------------------------------------------
@@ -312,7 +313,15 @@ class ChatService:
                  yoga_text = format_yogas_for_prompt(yogas)
              except Exception as yoga_err:
                logger.error(f"Yoga detection failed: {yoga_err}")
-            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text)
+               
+            
+            missing_evidence = ""
+            if is_astrology and not missing_fields:
+                missing_evidence = self._get_missing_evidence_note(session, topic, divisional_text)
+            
+                        
+            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)   
+            
             
             user_memory = ""
             consistency_note = ""
@@ -497,7 +506,12 @@ class ChatService:
                 except Exception as yoga_err:
                     logger.error(f"Yoga detection failed: {yoga_err}")
             
-            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text)
+            missing_evidence = ""
+            if is_astrology and not missing_fields:
+                missing_evidence = self._get_missing_evidence_note(session, topic, divisional_text)
+
+            
+            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
             
             user_memory = ""
             consistency_note = ""
@@ -667,5 +681,21 @@ class ChatService:
                 return None
         return None
 
+    def _get_missing_evidence_note(self, session: Dict, topic: Optional[str], divisional_text: str) -> str:
+        try:
+            cached_raw = session.get("kundli_raw")
+            cached_dasha = session.get("kundli_dasha")
+            if not cached_raw:
+                return ""
+            parsed = json.loads(cached_raw)
+            planets = parsed.get("planets", [])
+            ascendant_sign = parsed.get("ascendant_sign")
+            dasha_info = json.loads(cached_dasha) if cached_dasha else None
+
+            from app.services.topic_service import build_missing_evidence_note
+            return build_missing_evidence_note(topic, planets, ascendant_sign, dasha_info, divisional_text)
+        except Exception as e:
+            logger.error(f"Missing evidence check failed: {e}")
+            return ""
 
 chat_service = ChatService()
