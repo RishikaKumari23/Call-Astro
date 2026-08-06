@@ -76,7 +76,7 @@ class DashaApiService:
                         try:
                             feature_value = json.loads(feature_value)
                         except json.JSONDecodeError:
-                            logger.error(f"Dasha API '{FEATURE}' value was an unparseable string: {feature_value[:200]}")
+                            logger.error(f"Dasha API '{FEATURE}' value was an unparseable string: {str(feature_value)[:200]}")
                             return None
                     if isinstance(feature_value, list):
                         return feature_value

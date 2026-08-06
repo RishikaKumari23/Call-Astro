@@ -103,6 +103,119 @@ def classify_topic(message: str) -> Optional[str]:
     return None
 
 
+# Pre-defined instant follow-up suggestions per topic.
+# These replace the slow Ollama second-call which was timing out at 120s.
+TOPIC_SUGGESTIONS = {
+    "marriage": [
+        "Which gemstone should I wear to attract the right partner?",
+        "When is the best time for my marriage according to my Dasha?",
+        "How is my 7th house lord placed in my chart?",
+    ],
+    "career": [
+        "Which gemstone strengthens my career planet?",
+        "When will my career growth peak in the next 2 years?",
+        "Is my 10th house strong for a government job?",
+    ],
+    "finance": [
+        "Which stone or remedy can improve my financial luck?",
+        "When will my income increase according to my Dasha?",
+        "How is my 11th house placed for gains?",
+    ],
+    "health": [
+        "Which gemstone or remedy improves my vitality?",
+        "Which planet is affecting my health the most right now?",
+        "How does my current Dasha affect my physical strength?",
+    ],
+    "education": [
+        "Which gemstone improves concentration and memory?",
+        "Is my chart strong for higher education or abroad studies?",
+        "When is the best period to appear for exams?",
+    ],
+}
+
+DEFAULT_SUGGESTIONS = [
+    "Which gemstone is lucky for me?",
+    "How is my current Dasha period overall?",
+    "What does my Lagna (Ascendant) say about my personality?",
+]
+
+
+def get_instant_suggestions(topic: Optional[str], language: str = "English") -> list:
+    """Returns instant follow-up suggestions based on the detected topic.
+    No LLM call needed — responses are immediate."""
+    suggestions = TOPIC_SUGGESTIONS.get(topic, DEFAULT_SUGGESTIONS) if topic else DEFAULT_SUGGESTIONS
+
+    if language == "Hinglish":
+        hinglish_map = {
+            "marriage": [
+                "Sahi partner ke liye kaunsa gemstone pehnu?",
+                "Mere Dasha ke hisaab se shaadi kab hogi?",
+                "Mera 7th house kaisa hai?",
+            ],
+            "career": [
+                "Career ke liye kaunsa gemstone sahi rahega?",
+                "Agli 2 saalon mein career growth kab hogi?",
+                "Sarkari naukri ke liye mera 10th house kaisa hai?",
+            ],
+            "finance": [
+                "Paisa badhane ke liye kaunsa stone ya upay karoon?",
+                "Mere Dasha mein income kab badhegi?",
+                "Mera 11th house gains ke liye kaisa hai?",
+            ],
+            "health": [
+                "Sehat ke liye kaunsa gemstone ya upay sahi hai?",
+                "Abhi kaun sa planet meri health affect kar raha hai?",
+                "Meri current Dasha body strength pe kaisa asar kar rahi hai?",
+            ],
+            "education": [
+                "Concentration ke liye kaunsa gemstone sahi hai?",
+                "Mera chart higher education ya abroad ke liye kaisa hai?",
+                "Exam ke liye best time kaunsa hai?",
+            ],
+        }
+        return hinglish_map.get(topic, [
+            "Mere liye kaunsa gemstone lucky hai?",
+            "Meri current Dasha overall kaisi hai?",
+            "Mera Lagna (Ascendant) kya kehta hai?",
+        ])
+
+    if language == "Hindi":
+        hindi_map = {
+            "marriage": [
+                "सही जीवनसाथी के लिए कौन सा रत्न पहनूं?",
+                "मेरी दशा के अनुसार विवाह कब होगा?",
+                "मेरा सप्तम भाव कैसा है?",
+            ],
+            "career": [
+                "करियर के लिए कौन सा रत्न सही रहेगा?",
+                "अगले 2 वर्षों में करियर विकास कब होगा?",
+                "सरकारी नौकरी के लिए मेरा दशम भाव कैसा है?",
+            ],
+            "finance": [
+                "धन वृद्धि के लिए कौन सा रत्न या उपाय करूं?",
+                "मेरी दशा में आय कब बढ़ेगी?",
+                "मेरा एकादश भाव लाभ के लिए कैसा है?",
+            ],
+            "health": [
+                "स्वास्थ्य के लिए कौन सा रत्न या उपाय उचित है?",
+                "अभी कौन सा ग्रह मेरे स्वास्थ्य को प्रभावित कर रहा है?",
+                "वर्तमान दशा शारीरिक शक्ति पर कैसा प्रभाव डाल रही है?",
+            ],
+            "education": [
+                "एकाग्रता के लिए कौन सा रत्न उचित है?",
+                "उच्च शिक्षा या विदेश के लिए मेरी कुंडली कैसी है?",
+                "परीक्षा के लिए सर्वोत्तम समय कौन सा है?",
+            ],
+        }
+        return hindi_map.get(topic, [
+            "मेरे लिए कौन सा रत्न भाग्यशाली है?",
+            "मेरी वर्तमान दशा कैसी है?",
+            "मेरा लग्न (Ascendant) क्या कहता है?",
+        ])
+
+    return suggestions
+
+
 def get_house_for_sign(sign_name: str, ascendant_sign: str) -> Optional[int]:
     """House 1 = ascendant's own sign; houses count forward from there."""
     try:

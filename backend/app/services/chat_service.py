@@ -13,7 +13,7 @@ from app.utils.logger import logger
 
 from app.services.topic_service import (
     classify_topic, build_topic_emphasis, get_search_bias,
-    build_explanation_footer, TOPIC_CHART_FACTORS
+    build_explanation_footer, TOPIC_CHART_FACTORS, get_instant_suggestions
 )
 from app.services.dasha_api_service import dasha_api_service
 from app.services.topic_service import classify_topic, rank_favorable_periods, format_dasha_timeline_for_prompt
@@ -550,6 +550,7 @@ class ChatService:
             
             
             astrologer_prompt = ASTROLOGER_PROMPT.format(
+                name=session.get("name") or "Friend",
                 language=language, dob=session.get("dob") or "Not provided",
                 birth_time=session.get("birth_time") or "Not provided",
                 birth_place=session.get("birth_place") or "Not provided",
@@ -583,16 +584,10 @@ class ChatService:
              except Exception as trace_err:
                logger.error(f"Reasoning trace caching failed: {trace_err}")
             else:
-              logger.info("DEBUG trace-gate: SKIPPED — is_astrology or missing_fields blocked it") 
-            
-             
-            suggestions = []
-            if full_text and len(full_text) > 20:
-                try:
-                    suggestions = llm_service.generate_followups(full_text, language)
-                except Exception as followup_err:
-                    logger.error(f"Follow-up suggestion generation failed: {followup_err}")
-                    suggestions = []
+              logger.info("DEBUG trace-gate: SKIPPED — is_astrology or missing_fields blocked it")
+
+            # Instant topic-based suggestions — no second LLM call needed
+            suggestions = get_instant_suggestions(topic, language)
 
             yield {"type": "done", "session_id": session_id, "message": full_text,
                    "dob": session.get("dob"), "birth_time": session.get("birth_time"),
