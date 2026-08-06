@@ -115,7 +115,7 @@ class DashaApiService:
             return None
 
         current_antar = None
-        for antar in current_maha.get("antardasha", []):
+        for antar in current_maha.get("antardashas", []):
             antar_start = _parse_dt(antar.get("start", ""))
             antar_end = _parse_dt(antar.get("end", ""))
             if antar_start and antar_end and antar_start <= now <= antar_end:
@@ -170,7 +170,7 @@ class DashaApiService:
                     "end": maha.get("end"),
                 })
                 continue
-            for antar in maha.get("antardasha", []):
+            for antar in maha.get("antardashas", []):
                 antar_lord = antar.get("antardasha") or antar.get("antardasha_display")
                 flat.append({
                     "mahadasha": maha_lord,
