@@ -49,6 +49,11 @@ class ChatService:
                 return time_str
 
     def _fetch_and_cache_kundli(self, session_id: str, session: Dict) -> str:
+        """Fetches Kundli + real Dasha data once, and ALSO pre-computes and
+        caches yoga_text right here — since yogas depend only on planets/
+        ascendant, not on topic, they never need recomputation for this
+        birth chart. This is the single expensive network round-trip;
+        everything downstream should read from cache, not refetch."""
         try:
             coords = geocoding_service.geocode(session.get("birth_place"))
             if not coords:
@@ -72,17 +77,28 @@ class ChatService:
                 dasha_json = json.dumps(dasha_info) if dasha_info else None
                 full_raw_json = json.dumps(kundli_data, ensure_ascii=False)
 
-                db.update_session(session_id, {
+                # Pre-compute yoga text once here — topic-independent, so this
+                # is the only place it ever needs to be calculated.
+                yoga_text = ""
+                if chart_data:
+                    try:
+                        yogas = detect_yogas(chart_data.get("planets", []), chart_data.get("ascendant_sign", ""))
+                        yoga_text = format_yogas_for_prompt(yogas)
+                    except Exception as yoga_err:
+                        logger.error(f"Yoga pre-computation failed: {yoga_err}")
+
+                updates = {
                     "kundli_data": kundli_str,
                     "kundli_raw": chart_json,
                     "kundli_dasha": dasha_json,
                     "kundli_full_raw": full_raw_json,
-                })
-                session["kundli_data"] = kundli_str
-                session["kundli_raw"] = chart_json
-                session["kundli_dasha"] = dasha_json
-                session["kundli_full_raw"] = full_raw_json
-                logger.info("Kundli data fetched and cached (summary + chart + dasha + full raw)")
+                    "yoga_text": yoga_text,
+                    "topic_cache": None,        # invalidate any stale per-topic cache
+                    "dasha_tree_raw": None,     # invalidate — refetched lazily on next timeline need
+                }
+                db.update_session(session_id, updates)
+                session.update(updates)
+                logger.info("Kundli data fetched and cached (summary + chart + dasha + full raw + yoga)")
                 return kundli_str
         except Exception as kundli_err:
             logger.error(f"Kundli fetch failed: {kundli_err}")
@@ -90,7 +106,6 @@ class ChatService:
         return "No chart data available."
 
     def _get_rag_context(self, message_text: str, topic: Optional[str] = None):
-        """Returns (context_str, source_names_list)."""
         try:
             search_query = message_text
             if topic:
@@ -115,82 +130,126 @@ class ChatService:
             logger.error(f"RAG failed: {rag_err}")
             return "No reference available.", []
 
-    def _get_topic_emphasis(self, session: Dict, topic: Optional[str]) -> str:
-        if not topic:
-            return ""
+    # ------------------------------------------------------------------
+    # Per-topic cache — bundles emphasis/divisional/consistency/missing-
+    # evidence/timeline into ONE JSON blob keyed by topic, so asking the
+    # SAME topic again in a session reuses everything instantly.
+    # ------------------------------------------------------------------
+    def _get_topic_cache(self, session: Dict, topic: str) -> Optional[Dict]:
+        raw = session.get("topic_cache")
+        if not raw:
+            return None
         try:
-            cached_raw = session.get("kundli_raw")
-            if not cached_raw:
-                return ""
-            parsed = json.loads(cached_raw)
-            planets = parsed.get("planets", [])
-            ascendant_sign = parsed.get("ascendant_sign")
-            if planets and ascendant_sign:
-                return build_topic_emphasis(topic, planets, ascendant_sign, None)
-        except Exception as topic_err:
-            logger.error(f"Topic emphasis build failed: {topic_err}")
-        return ""
+            cache = json.loads(raw)
+            return cache.get(topic)
+        except Exception:
+            return None
 
-    def _get_divisional_chart_text(self, session_id: str, session: Dict, topic: Optional[str]) -> str:
-        if not topic:
-            return ""
-        config = TOPIC_CHART_FACTORS.get(topic, {})
-        chart_code = config.get("divisional_chart")
-        if not chart_code:
-            return ""
-
+    def _save_topic_cache(self, session_id: str, session: Dict, topic: str, bundle: Dict):
         try:
-            kundli_data = self._get_full_kundli_response(session_id, session)
-            if not kundli_data:
-                return ""
-
-            purpose_map = {"D9": "marriage", "D10": "career", "D24": "education", "D7": "children"}
-            purpose = purpose_map.get(chart_code, chart_code)
-            return kundli_service.summarize_divisional_chart(kundli_data, chart_code, purpose)
+            raw = session.get("topic_cache")
+            cache = json.loads(raw) if raw else {}
+            cache[topic] = bundle
+            cache_json = json.dumps(cache, ensure_ascii=False)
+            db.update_session(session_id, {"topic_cache": cache_json})
+            session["topic_cache"] = cache_json
         except Exception as e:
-            logger.error(f"Divisional chart fetch failed: {e}")
-            return ""
+            logger.error(f"Failed to save topic cache for '{topic}': {e}")
 
-    def _get_yoga_text(self, session: Dict) -> str:
+    def _get_topic_bundle(self, session_id: str, session: Dict, topic: Optional[str], language: str) -> Dict[str, str]:
+        """Returns {emphasis, divisional, consistency, missing_evidence,
+        timeline} for this topic — from cache if already computed this
+        session, otherwise computes once and caches."""
+        empty = {"emphasis": "", "divisional": "", "consistency": "", "missing_evidence": "", "timeline": ""}
+        if not topic:
+            return empty
+
+        cached = self._get_topic_cache(session, topic)
+        if cached is not None:
+            logger.info(f"Using cached topic bundle for '{topic}'")
+            return cached
+
+        # Not cached — compute all five pieces once
+        bundle = dict(empty)
         try:
             cached_raw = session.get("kundli_raw")
-            if not cached_raw:
-                return ""
-            parsed = json.loads(cached_raw)
-            planets = parsed.get("planets", [])
-            ascendant_sign = parsed.get("ascendant_sign")
-            if planets and ascendant_sign:
-                yogas = detect_yogas(planets, ascendant_sign)
-                return format_yogas_for_prompt(yogas)
-        except Exception as yoga_err:
-            logger.error(f"Yoga detection failed: {yoga_err}")
-        return ""
+            cached_dasha = session.get("kundli_dasha")
+            if cached_raw:
+                parsed = json.loads(cached_raw)
+                planets = parsed.get("planets", [])
+                ascendant_sign = parsed.get("ascendant_sign")
+                dasha_info = json.loads(cached_dasha) if cached_dasha else None
+
+                if planets and ascendant_sign:
+                    bundle["emphasis"] = build_topic_emphasis(topic, planets, ascendant_sign, None)
+
+                from app.services.topic_service import build_consistency_check, build_consistency_note, build_missing_evidence_note
+                check = build_consistency_check(topic, planets, ascendant_sign, dasha_info)
+                bundle["consistency"] = build_consistency_note(check, topic)
+
+                config = TOPIC_CHART_FACTORS.get(topic, {})
+                chart_code = config.get("divisional_chart")
+                if chart_code:
+                    kundli_data = self._get_full_kundli_response(session_id, session)
+                    if kundli_data:
+                        purpose_map = {"D9": "marriage", "D10": "career", "D24": "education", "D7": "children"}
+                        bundle["divisional"] = kundli_service.summarize_divisional_chart(
+                            kundli_data, chart_code, purpose_map.get(chart_code, chart_code)
+                        )
+
+                bundle["missing_evidence"] = build_missing_evidence_note(
+                    topic, planets, ascendant_sign, dasha_info, bundle["divisional"]
+                )
+
+            bundle["timeline"] = self._get_dasha_timeline(session_id, session, topic, language)
+        except Exception as e:
+            logger.error(f"Topic bundle build failed for '{topic}': {e}")
+
+        self._save_topic_cache(session_id, session, topic, bundle)
+        return bundle
 
     def _get_dasha_timeline(self, session_id: str, session: Dict, topic: Optional[str], language: str) -> str:
+        """Uses the cached raw dasha tree (dasha_tree_raw) if available —
+        fetching it from the network only once per Kundli fetch, not once
+        per topic question. Only the favorability RANKING differs per topic,
+        which is cheap local computation, not a network call."""
         if not topic:
             return ""
         try:
-            time_24h = self._to_24h(session.get("birth_time", ""))
-            coords_lat = session.get("latitude")
-            coords_lon = session.get("longitude")
-            if not (coords_lat and coords_lon):
-                return ""
+            cached_tree_raw = session.get("dasha_tree_raw")
+            dasha_tree = None
+            if cached_tree_raw:
+                try:
+                    dasha_tree = json.loads(cached_tree_raw)
+                except Exception:
+                    dasha_tree = None
 
-            kundli_raw_full = self._get_full_kundli_response(session_id, session)
-            ascendant_data = kundli_service.get_ascendant_data(kundli_raw_full) if kundli_raw_full else None
+            if dasha_tree is None:
+                time_24h = self._to_24h(session.get("birth_time", ""))
+                coords_lat = session.get("latitude")
+                coords_lon = session.get("longitude")
+                if not (coords_lat and coords_lon):
+                    return ""
 
-            if not ascendant_data:
-                logger.warning("Could not extract ascendant_data — skipping dasha timeline")
-                return ""
+                kundli_raw_full = self._get_full_kundli_response(session_id, session)
+                ascendant_data = kundli_service.get_ascendant_data(kundli_raw_full) if kundli_raw_full else None
+                if not ascendant_data:
+                    logger.warning("Could not extract ascendant_data — skipping dasha timeline")
+                    return ""
 
-            dasha_tree = dasha_api_service.fetch_dasha_tree(
-                date=session.get("dob"),
-                time=time_24h,
-                latitude=coords_lat, longitude=coords_lon,
-                ascendant_data=ascendant_data,
-            )
-            if not dasha_tree:
-                return ""
+                dasha_tree = dasha_api_service.fetch_dasha_tree(
+                    date=session.get("dob"), time=time_24h,
+                    latitude=coords_lat, longitude=coords_lon,
+                    ascendant_data=ascendant_data,
+                )
+                if not dasha_tree:
+                    return ""
+
+                # Cache the raw tree so future topics/messages this session
+                # never hit the network again for timeline data.
+                tree_json = json.dumps(dasha_tree, ensure_ascii=False)
+                db.update_session(session_id, {"dasha_tree_raw": tree_json})
+                session["dasha_tree_raw"] = tree_json
 
             upcoming = dasha_api_service.get_upcoming_periods(dasha_tree, months_ahead=60)
             favorable = rank_favorable_periods(upcoming, topic)
@@ -201,6 +260,11 @@ class ChatService:
             logger.error(f"Dasha timeline fetch failed: {dasha_err}")
             return ""
 
+    def _get_yoga_text(self, session: Dict) -> str:
+        """Reads the pre-computed yoga text cached during _fetch_and_cache_kundli.
+        Never recalculates — yogas are fixed for a given birth chart."""
+        return session.get("yoga_text") or ""
+
     def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str,
                                    yoga_text: str, missing_evidence: str = "") -> str:
         parts = [p for p in [kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence] if p]
@@ -210,7 +274,6 @@ class ChatService:
     # Response Novelty Checker
     # ------------------------------------------------------------------
     def _get_recent_assistant_texts(self, session_id: str, limit: int = 5) -> List[str]:
-        """Fetch the last few assistant messages for similarity comparison."""
         history = db.get_history(session_id, limit=20)
         assistant_msgs = [m["content"] for m in history if m["role"] == "assistant"]
         return assistant_msgs[-limit:]
@@ -223,18 +286,12 @@ class ChatService:
         return SequenceMatcher(None, a, b).ratio()
 
     def _is_too_similar(self, response_text: str, recent_texts: List[str], threshold: float = 0.75) -> Optional[str]:
-        """Returns the most-similar prior response if any exceeds the
-        threshold, else None. Used for the non-streaming regenerate flow."""
         for prior in recent_texts:
             if self._similarity_ratio(response_text, prior) >= threshold:
                 return prior
         return None
 
     def _get_repeat_topic_hint(self, session: Dict, topic: Optional[str]) -> str:
-        """For the STREAMING path (can't regenerate after tokens are sent):
-        if this exact topic was already discussed, surface the actual last
-        response about it so the prompt can be told to vary wording rather
-        than repeat it. Preventive, not corrective."""
         if not topic:
             return ""
         try:
@@ -256,9 +313,6 @@ class ChatService:
             logger.error(f"Repeat-topic hint build failed: {e}")
             return ""
 
-    # ------------------------------------------------------------------
-    # Topic memory
-    # ------------------------------------------------------------------
     def _get_user_memory_block(self, session: Dict, current_topic: Optional[str]) -> str:
         try:
             raw = session.get("topic_memory")
@@ -267,13 +321,11 @@ class ChatService:
             memory = json.loads(raw)
             if not memory:
                 return ""
-
             lines = []
             for topic, summary in memory.items():
                 if topic == current_topic:
                     continue
                 lines.append(f"- {topic.capitalize()}: {summary}")
-
             if not lines:
                 return ""
             return "Earlier in this conversation, you already discussed:\n" + "\n".join(lines)
@@ -287,14 +339,11 @@ class ChatService:
         try:
             raw = session.get("topic_memory")
             memory = json.loads(raw) if raw else {}
-
             truncated = response_text.strip().replace("\n", " ")
             if len(truncated) > 150:
                 truncated = truncated[:150].rsplit(" ", 1)[0] + "..."
-
             memory[topic] = truncated
             memory_json = json.dumps(memory, ensure_ascii=False)
-
             db.update_session(session_id, {"topic_memory": memory_json})
             session["topic_memory"] = memory_json
             logger.info(f"Updated topic_memory['{topic}']")
@@ -383,27 +432,19 @@ class ChatService:
                 cached_kundli = session.get("kundli_data")
                 kundli_str = cached_kundli if cached_kundli else self._fetch_and_cache_kundli(session_id, session)
 
-            topic_emphasis = ""
-            divisional_text = ""
-            if is_astrology and not missing_fields and topic:
-                topic_emphasis = self._get_topic_emphasis(session, topic)
-                divisional_text = self._get_divisional_chart_text(session_id, session, topic)
-
             yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields) else ""
 
-            missing_evidence = ""
-            if is_astrology and not missing_fields:
-                missing_evidence = self._get_missing_evidence_note(session, topic, divisional_text)
+            topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = ""
+            if is_astrology and not missing_fields and topic:
+                bundle = self._get_topic_bundle(session_id, session, topic, language)
+                topic_emphasis = bundle["emphasis"]
+                divisional_text = bundle["divisional"]
+                consistency_note = bundle["consistency"]
+                missing_evidence = bundle["missing_evidence"]
+                dasha_timeline_str = bundle["timeline"]
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
-
-            user_memory = ""
-            consistency_note = ""
-            if is_astrology and not missing_fields:
-                consistency_note = self._get_consistency_note(session, topic)
-                user_memory = self._get_user_memory_block(session, topic)
-
-            dasha_timeline_str = self._get_dasha_timeline(session_id, session, topic, language)
+            user_memory = self._get_user_memory_block(session, topic) if (is_astrology and not missing_fields) else ""
 
             try:
                 astrologer_prompt = ASTROLOGER_PROMPT.format(
@@ -419,8 +460,6 @@ class ChatService:
                 )
                 response_text = llm_service.generate(prompt=astrologer_prompt, temperature=0.6)
 
-                # Response Novelty Check — regenerate once if too similar to
-                # a recent response for the same conversation.
                 if is_astrology and not missing_fields:
                     recent_texts = self._get_recent_assistant_texts(session_id)
                     similar_to = self._is_too_similar(response_text, recent_texts)
@@ -542,29 +581,24 @@ class ChatService:
                 cached_kundli = session.get("kundli_data")
                 kundli_str = cached_kundli if cached_kundli else self._fetch_and_cache_kundli(session_id, session)
 
-            topic_emphasis = ""
-            divisional_text = ""
-            if is_astrology and not missing_fields and topic:
-                topic_emphasis = self._get_topic_emphasis(session, topic)
-                divisional_text = self._get_divisional_chart_text(session_id, session, topic)
-
             yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields) else ""
 
-            missing_evidence = ""
-            if is_astrology and not missing_fields:
-                missing_evidence = self._get_missing_evidence_note(session, topic, divisional_text)
+            topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = ""
+            if is_astrology and not missing_fields and topic:
+                bundle = self._get_topic_bundle(session_id, session, topic, language)
+                topic_emphasis = bundle["emphasis"]
+                divisional_text = bundle["divisional"]
+                consistency_note = bundle["consistency"]
+                missing_evidence = bundle["missing_evidence"]
+                dasha_timeline_str = bundle["timeline"]
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
 
             user_memory = ""
-            consistency_note = ""
             repeat_hint = ""
             if is_astrology and not missing_fields:
-                consistency_note = self._get_consistency_note(session, topic)
                 user_memory = self._get_user_memory_block(session, topic)
                 repeat_hint = self._get_repeat_topic_hint(session, topic)
-
-            dasha_timeline_str = self._get_dasha_timeline(session_id, session, topic, language)
 
             astrologer_prompt = ASTROLOGER_PROMPT.format(
                 name=session.get("name") or "Friend",
@@ -580,8 +614,6 @@ class ChatService:
             if repeat_hint:
                 astrologer_prompt += f"\n\n{repeat_hint}"
 
-            # Slightly higher temperature when repeating a topic, to
-            # naturally encourage varied phrasing alongside the explicit hint.
             gen_temperature = 0.75 if repeat_hint else 0.6
 
             full_text = ""
@@ -618,27 +650,6 @@ class ChatService:
             yield {"type": "done", "session_id": session_id, "message": fallback,
                    "dob": None, "birth_time": None, "birth_place": None, "language": "Hinglish"}
 
-    def _get_consistency_note(self, session: Dict, topic: Optional[str]) -> str:
-        if not topic:
-            return ""
-        try:
-            cached_raw = session.get("kundli_raw")
-            cached_dasha = session.get("kundli_dasha")
-            if not cached_raw:
-                return ""
-
-            parsed = json.loads(cached_raw)
-            planets = parsed.get("planets", [])
-            ascendant_sign = parsed.get("ascendant_sign")
-            dasha_info = json.loads(cached_dasha) if cached_dasha else None
-
-            from app.services.topic_service import build_consistency_check, build_consistency_note
-            check = build_consistency_check(topic, planets, ascendant_sign, dasha_info)
-            return build_consistency_note(check, topic)
-        except Exception as e:
-            logger.error(f"Consistency check failed: {e}")
-            return ""
-
     def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits_sources: Optional[List[str]] = None) -> list:
         if not topic:
             return []
@@ -647,7 +658,6 @@ class ChatService:
             cached_dasha = session.get("kundli_dasha")
             if not cached_raw:
                 return []
-
             parsed = json.loads(cached_raw)
             planets = parsed.get("planets", [])
             ascendant_sign = parsed.get("ascendant_sign")
@@ -679,23 +689,6 @@ class ChatService:
             except Exception:
                 return None
         return None
-
-    def _get_missing_evidence_note(self, session: Dict, topic: Optional[str], divisional_text: str) -> str:
-        try:
-            cached_raw = session.get("kundli_raw")
-            cached_dasha = session.get("kundli_dasha")
-            if not cached_raw:
-                return ""
-            parsed = json.loads(cached_raw)
-            planets = parsed.get("planets", [])
-            ascendant_sign = parsed.get("ascendant_sign")
-            dasha_info = json.loads(cached_dasha) if cached_dasha else None
-
-            from app.services.topic_service import build_missing_evidence_note
-            return build_missing_evidence_note(topic, planets, ascendant_sign, dasha_info, divisional_text)
-        except Exception as e:
-            logger.error(f"Missing evidence check failed: {e}")
-            return ""
 
 
 chat_service = ChatService()
