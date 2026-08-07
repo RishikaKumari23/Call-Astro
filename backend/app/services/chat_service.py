@@ -1,3 +1,6 @@
+# ============================================================
+# chat_service.py (updated)
+# ============================================================
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -15,7 +18,8 @@ from app.utils.logger import logger
 from app.services.topic_service import (
     classify_topic, build_topic_emphasis, get_search_bias,
     build_explanation_footer, TOPIC_CHART_FACTORS, get_instant_suggestions,
-    rank_favorable_periods, format_dasha_timeline_for_prompt
+    rank_favorable_periods, format_dasha_timeline_for_prompt,
+    build_evidence_vote, format_evidence_vote_for_prompt
 )
 from app.services.dasha_api_service import dasha_api_service
 from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
@@ -77,8 +81,6 @@ class ChatService:
                 dasha_json = json.dumps(dasha_info) if dasha_info else None
                 full_raw_json = json.dumps(kundli_data, ensure_ascii=False)
 
-                # Pre-compute yoga text once here — topic-independent, so this
-                # is the only place it ever needs to be calculated.
                 yoga_text = ""
                 if chart_data:
                     try:
@@ -132,8 +134,8 @@ class ChatService:
 
     # ------------------------------------------------------------------
     # Per-topic cache — bundles emphasis/divisional/consistency/missing-
-    # evidence/timeline into ONE JSON blob keyed by topic, so asking the
-    # SAME topic again in a session reuses everything instantly.
+    # evidence/timeline/evidence_vote into ONE JSON blob keyed by topic,
+    # so asking the SAME topic again in a session reuses everything instantly.
     # ------------------------------------------------------------------
     def _get_topic_cache(self, session: Dict, topic: str) -> Optional[Dict]:
         raw = session.get("topic_cache")
@@ -156,20 +158,23 @@ class ChatService:
         except Exception as e:
             logger.error(f"Failed to save topic cache for '{topic}': {e}")
 
-    def _get_topic_bundle(self, session_id: str, session: Dict, topic: Optional[str], language: str) -> Dict[str, str]:
+    def _get_topic_bundle(self, session_id: str, session: Dict, topic: Optional[str], language: str) -> Dict[str, Any]:
         """Returns {emphasis, divisional, consistency, missing_evidence,
-        timeline} for this topic — from cache if already computed this
-        session, otherwise computes once and caches."""
-        empty = {"emphasis": "", "divisional": "", "consistency": "", "missing_evidence": "", "timeline": ""}
+        timeline, evidence_vote} for this topic — from cache if already
+        computed this session, otherwise computes once and caches."""
+        empty = {"emphasis": "", "divisional": "", "consistency": "", "missing_evidence": "", "timeline": "", "evidence_vote": None}
         if not topic:
             return empty
 
         cached = self._get_topic_cache(session, topic)
         if cached is not None:
             logger.info(f"Using cached topic bundle for '{topic}'")
+            # Defensive default for bundles cached before evidence_vote existed.
+            if "evidence_vote" not in cached:
+                cached["evidence_vote"] = None
             return cached
 
-        # Not cached — compute all five pieces once
+        # Not cached — compute all pieces once
         bundle = dict(empty)
         try:
             cached_raw = session.get("kundli_raw")
@@ -186,6 +191,19 @@ class ChatService:
                 from app.services.topic_service import build_consistency_check, build_consistency_note, build_missing_evidence_note
                 check = build_consistency_check(topic, planets, ascendant_sign, dasha_info)
                 bundle["consistency"] = build_consistency_note(check, topic)
+
+                # Evidence Voting — a richer, weighted 3-source vote
+                # (Dasha, Chart, Yogas) layered on top of the binary
+                # consistency check above. Reuses the pre-computed
+                # yoga_text — no extra network or LLM calls.
+                yoga_text_for_vote = session.get("yoga_text") or ""
+                vote = build_evidence_vote(topic, planets, ascendant_sign, dasha_info, yoga_text=yoga_text_for_vote)
+                bundle["evidence_vote"] = vote
+                vote_text = format_evidence_vote_for_prompt(vote, topic)
+                if vote_text:
+                    bundle["consistency"] = (
+                        f"{bundle['consistency']}\n\n{vote_text}" if bundle["consistency"] else vote_text
+                    )
 
                 config = TOPIC_CHART_FACTORS.get(topic, {})
                 chart_code = config.get("divisional_chart")
@@ -245,8 +263,6 @@ class ChatService:
                 if not dasha_tree:
                     return ""
 
-                # Cache the raw tree so future topics/messages this session
-                # never hit the network again for timeline data.
                 tree_json = json.dumps(dasha_tree, ensure_ascii=False)
                 db.update_session(session_id, {"dasha_tree_raw": tree_json})
                 session["dasha_tree_raw"] = tree_json
@@ -666,8 +682,14 @@ class ChatService:
             from app.services.topic_service import build_consistency_check, build_reasoning_trace
             consistency_check = build_consistency_check(topic, planets, ascendant_sign, dasha_info)
 
+            # Pull the evidence vote from the cached topic bundle rather than
+            # recomputing — it's already been built (and cached) once per
+            # topic per session by _get_topic_bundle().
+            topic_cache = self._get_topic_cache(session, topic)
+            evidence_vote = topic_cache.get("evidence_vote") if topic_cache else None
+
             return build_reasoning_trace(
-                topic, ascendant_sign, planets, dasha_info, consistency_check, rag_hits_sources
+                topic, ascendant_sign, planets, dasha_info, consistency_check, rag_hits_sources, evidence_vote
             )
         except Exception as e:
             logger.error(f"Reasoning trace build failed: {e}")
