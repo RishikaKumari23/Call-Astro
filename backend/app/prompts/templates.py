@@ -56,6 +56,8 @@ Rules:
 
 Upcoming Dasha Timeline (use for timing/"when" questions):
 {dasha_timeline}
+Response Contract for THIS question (follow this structure specifically):
+{response_contract}
 Birth Details:
 - Name: {name}
 - Date of Birth: {dob}

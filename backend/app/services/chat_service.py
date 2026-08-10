@@ -1,6 +1,3 @@
-# ============================================================
-# chat_service.py (updated)
-# ============================================================
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -14,7 +11,8 @@ from app.rag.embeddings import EmbeddingsProvider
 from app.prompts.templates import ASTROLOGER_PROMPT, MISSING_INFO_PROMPT
 from app.config.settings import settings
 from app.utils.logger import logger
-
+from app.services.intent_service import classify_intent, get_response_contract
+from app.services.claim_validator import validate_claims, build_claim_correction_instructions
 from app.services.topic_service import (
     classify_topic, build_topic_emphasis, get_search_bias,
     build_explanation_footer, TOPIC_CHART_FACTORS, get_instant_suggestions,
@@ -169,12 +167,10 @@ class ChatService:
         cached = self._get_topic_cache(session, topic)
         if cached is not None:
             logger.info(f"Using cached topic bundle for '{topic}'")
-            # Defensive default for bundles cached before evidence_vote existed.
             if "evidence_vote" not in cached:
                 cached["evidence_vote"] = None
             return cached
 
-        # Not cached — compute all pieces once
         bundle = dict(empty)
         try:
             cached_raw = session.get("kundli_raw")
@@ -192,10 +188,6 @@ class ChatService:
                 check = build_consistency_check(topic, planets, ascendant_sign, dasha_info)
                 bundle["consistency"] = build_consistency_note(check, topic)
 
-                # Evidence Voting — a richer, weighted 3-source vote
-                # (Dasha, Chart, Yogas) layered on top of the binary
-                # consistency check above. Reuses the pre-computed
-                # yoga_text — no extra network or LLM calls.
                 yoga_text_for_vote = session.get("yoga_text") or ""
                 vote = build_evidence_vote(topic, planets, ascendant_sign, dasha_info, yoga_text=yoga_text_for_vote)
                 bundle["evidence_vote"] = vote
@@ -227,10 +219,6 @@ class ChatService:
         return bundle
 
     def _get_dasha_timeline(self, session_id: str, session: Dict, topic: Optional[str], language: str) -> str:
-        """Uses the cached raw dasha tree (dasha_tree_raw) if available —
-        fetching it from the network only once per Kundli fetch, not once
-        per topic question. Only the favorability RANKING differs per topic,
-        which is cheap local computation, not a network call."""
         if not topic:
             return ""
         try:
@@ -277,8 +265,6 @@ class ChatService:
             return ""
 
     def _get_yoga_text(self, session: Dict) -> str:
-        """Reads the pre-computed yoga text cached during _fetch_and_cache_kundli.
-        Never recalculates — yogas are fixed for a given birth chart."""
         return session.get("yoga_text") or ""
 
     def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str,
@@ -437,6 +423,8 @@ class ChatService:
                     }
 
             topic = classify_topic(message_text) if (is_astrology and not missing_fields) else None
+            intent = classify_intent(message_text) if (is_astrology and not missing_fields) else "general"
+            response_contract = get_response_contract(intent)
 
             context_str = ""
             rag_sources = []
@@ -451,6 +439,7 @@ class ChatService:
             yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields) else ""
 
             topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = ""
+            evidence_vote = None
             if is_astrology and not missing_fields and topic:
                 bundle = self._get_topic_bundle(session_id, session, topic, language)
                 topic_emphasis = bundle["emphasis"]
@@ -458,6 +447,7 @@ class ChatService:
                 consistency_note = bundle["consistency"]
                 missing_evidence = bundle["missing_evidence"]
                 dasha_timeline_str = bundle["timeline"]
+                evidence_vote = bundle.get("evidence_vote")
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
             user_memory = self._get_user_memory_block(session, topic) if (is_astrology and not missing_fields) else ""
@@ -472,6 +462,7 @@ class ChatService:
                     user_memory=user_memory or "No prior topics discussed yet.",
                     consistency_note=consistency_note or "No specific conflict detected.",
                     dasha_timeline=dasha_timeline_str or "No timeline data available.",
+                    response_contract=response_contract,
                     history=history_text, query=message_text
                 )
                 response_text = llm_service.generate(prompt=astrologer_prompt, temperature=0.6)
@@ -479,15 +470,29 @@ class ChatService:
                 if is_astrology and not missing_fields:
                     recent_texts = self._get_recent_assistant_texts(session_id)
                     similar_to = self._is_too_similar(response_text, recent_texts)
-                    if similar_to:
-                        logger.info("Response too similar to a recent one — regenerating with anti-repetition instruction")
-                        retry_prompt = astrologer_prompt + (
-                            f"\n\nIMPORTANT: Your previous response was very similar to this one:\n"
-                            f"\"{similar_to}\"\n"
-                            f"Express the same astrological reasoning but do NOT repeat the same wording. "
-                            f"Focus specifically on what's different about the CURRENT question."
-                        )
+
+                    claim_failures = validate_claims(response_text, dasha_timeline_str, evidence_vote)
+
+                    if similar_to or claim_failures:
+                        retry_prompt = astrologer_prompt
+                        if similar_to:
+                            retry_prompt += (
+                                f"\n\nIMPORTANT: Your previous response was very similar to this one:\n"
+                                f"\"{similar_to}\"\n"
+                                f"Express the same astrological reasoning but do NOT repeat the same wording. "
+                                f"Focus specifically on what's different about the CURRENT question."
+                            )
+                        if claim_failures:
+                            logger.info(f"Claim validation found {len(claim_failures)} issue(s) — regenerating with corrections")
+                            retry_prompt += "\n\n" + build_claim_correction_instructions(claim_failures)
+
                         response_text = llm_service.generate(prompt=retry_prompt, temperature=0.75)
+
+                        # Re-validate once after the fix attempt, log-only —
+                        # don't loop indefinitely if the model still misses it.
+                        remaining = validate_claims(response_text, dasha_timeline_str, evidence_vote)
+                        if remaining:
+                            logger.warning(f"Claim validation still found {len(remaining)} issue(s) after regeneration")
             except Exception as gen_err:
                 logger.error(f"Generation failed: {gen_err}")
                 response_text = "Mujhe samajhne mein kuch pareshani ho gayi."
@@ -586,6 +591,8 @@ class ChatService:
                     return
 
             topic = classify_topic(message_text) if (is_astrology and not missing_fields) else None
+            intent = classify_intent(message_text) if (is_astrology and not missing_fields) else "general"
+            response_contract = get_response_contract(intent)
 
             context_str = ""
             rag_sources = []
@@ -600,6 +607,7 @@ class ChatService:
             yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields) else ""
 
             topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = ""
+            evidence_vote = None
             if is_astrology and not missing_fields and topic:
                 bundle = self._get_topic_bundle(session_id, session, topic, language)
                 topic_emphasis = bundle["emphasis"]
@@ -607,6 +615,7 @@ class ChatService:
                 consistency_note = bundle["consistency"]
                 missing_evidence = bundle["missing_evidence"]
                 dasha_timeline_str = bundle["timeline"]
+                evidence_vote = bundle.get("evidence_vote")
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
 
@@ -625,6 +634,7 @@ class ChatService:
                 user_memory=user_memory or "No prior topics discussed yet.",
                 consistency_note=consistency_note or "No specific conflict detected.",
                 dasha_timeline=dasha_timeline_str or "No timeline data available.",
+                response_contract=response_contract,
                 history=history_text, query=message_text
             )
             if repeat_hint:
@@ -643,6 +653,18 @@ class ChatService:
                 yield {"type": "chunk", "text": full_text}
 
             db.add_message(session_id, "assistant", full_text)
+
+            # Claim validation is LOG-ONLY here — tokens are already streamed
+            # to the user, so there's nothing left to regenerate cleanly.
+            # This still gives you visibility into hallucination rate for
+            # streamed responses without breaking the streaming UX.
+            if is_astrology and not missing_fields:
+                try:
+                    claim_failures = validate_claims(full_text, dasha_timeline_str, evidence_vote)
+                    if claim_failures:
+                        logger.warning(f"Claim validation found {len(claim_failures)} issue(s) in streamed response (not corrected — log only): {claim_failures}")
+                except Exception as validate_err:
+                    logger.error(f"Claim validation failed: {validate_err}")
 
             if is_astrology and not missing_fields:
                 try:
@@ -682,9 +704,6 @@ class ChatService:
             from app.services.topic_service import build_consistency_check, build_reasoning_trace
             consistency_check = build_consistency_check(topic, planets, ascendant_sign, dasha_info)
 
-            # Pull the evidence vote from the cached topic bundle rather than
-            # recomputing — it's already been built (and cached) once per
-            # topic per session by _get_topic_bundle().
             topic_cache = self._get_topic_cache(session, topic)
             evidence_vote = topic_cache.get("evidence_vote") if topic_cache else None
 
