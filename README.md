@@ -260,7 +260,7 @@ curl http://localhost:8000/api/ingest/status
 1. **Ollama connection errors**:
    - Verify Ollama is running (`ollama serve` or open desktop app).
    - Ensure the LLM model is pulled: `ollama pull llama3`.
-2. **Missing `pypdf` warning**:
-   - If loading PDFs fails, run `pip install pypdf` (pre-installed inside the Docker image).
+2. **Missing `PyMuPDF` warning**:
+   - If loading PDFs fails, run `pip install PyMuPDF` (pre-installed inside the Docker image).
 3. **No responses or "Ollama model is not pulled"**:
    - Verify that your model name matching `.env` is exact. If you use a custom model like `mistral`, set `OLLAMA_LLM_MODEL=mistral`.
