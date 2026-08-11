@@ -205,8 +205,20 @@ class KundliService:
             lines = []
             positions = kundli_data.get("planetary_positions", [])
 
+            ZODIAC = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
+            
             ascendant_sign = None
             moon_sign = None
+            
+            for p in positions:
+                if p.get("name") == "Ascendant":
+                    ascendant_sign = p.get("sign_name", "")
+                    break
+            
+            asc_index = ZODIAC.index(ascendant_sign) if ascendant_sign in ZODIAC else 0
+
+            planet_lords = kundli_data.get("planet_lords", {})
+
             planet_lines = []
             for p in positions:
                 name = p.get("name", "Unknown")
@@ -214,13 +226,23 @@ class KundliService:
                 is_retro = str(p.get("isRetro", "")).lower() == "true"
 
                 if name == "Ascendant":
-                    ascendant_sign = sign
                     continue
                 if name == "Moon":
                     moon_sign = sign
+                
+                house_str = ""
+                if sign in ZODIAC and ascendant_sign in ZODIAC:
+                    sign_idx = ZODIAC.index(sign)
+                    house_num = (sign_idx - asc_index + 12) % 12 + 1
+                    house_str = f" ({house_num}th House)"
+                
+                lord_data = planet_lords.get(name, {})
+                star_lord = lord_data.get("star_lord")
+                pada = lord_data.get("pada")
+                nak_str = f" [Nakshatra Lord: {star_lord}, Pada: {pada}]" if star_lord else ""
 
                 retro_marker = " (retrograde)" if is_retro else ""
-                planet_lines.append(f"{name} in {sign}{retro_marker}")
+                planet_lines.append(f"{name} in {sign}{house_str}{nak_str}{retro_marker}")
 
             if ascendant_sign:
                 lines.append(f"Ascendant (Lagna): {ascendant_sign}")

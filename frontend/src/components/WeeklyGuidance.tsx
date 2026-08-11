@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 
 interface WeeklyGuidanceProps {
   sessionId: string;
+  language: string;
 }
 
-export default function WeeklyGuidance({ sessionId }: WeeklyGuidanceProps) {
+export default function WeeklyGuidance({ sessionId, language }: WeeklyGuidanceProps) {
   const [guidance, setGuidance] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -15,7 +16,7 @@ export default function WeeklyGuidance({ sessionId }: WeeklyGuidanceProps) {
         if (data.available) setGuidance(data.guidance);
       })
       .finally(() => setLoading(false));
-  }, [sessionId]);
+  }, [sessionId, language]);
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">

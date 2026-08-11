@@ -15,7 +15,10 @@ DAILY_PREDICTION_PROMPT = """You are a warm, experienced Indian Vedic Astrologer
 reflection for a client, based on their birth chart.
 
 Rules:
-1. Respond in {language}.
+1. Respond STRICTLY in {language}. 
+   - If Hindi: You MUST write in Devanagari script (e.g. आपका दिन शुभ हो). DO NOT write in English letters. NEVER use Chinese, Japanese, or Korean characters!
+   - If Hinglish: Write Hindi using English letters (e.g. Aapka din shubh ho).
+   - If English: Write normal English.
 2. Length: 2-3 short sentences, max 50 words. WhatsApp-style, warm and encouraging.
 3. Frame this as general daily guidance rooted in their natal chart, NOT a precise transit calculation.
 4. Do NOT mention specific times, hours, or numeric scores.
@@ -58,7 +61,10 @@ WEEKLY_GUIDANCE_PROMPT = """You are a warm, experienced Indian Vedic Astrologer 
 reflection for your client {name}, based on their birth chart and current planetary period (Dasha).
 
 Rules:
-1. Respond in {language}.
+1. Respond STRICTLY in {language}. 
+   - If Hindi: You MUST write in Devanagari script (e.g. आपका दिन शुभ हो). DO NOT write in English letters. NEVER use Chinese, Japanese, or Korean characters!
+   - If Hinglish: Write Hindi using English letters (e.g. Aapka din shubh ho).
+   - If English: Write normal English.
 2. Length: 3-4 short sentences, max 70 words. WhatsApp-style, warm and encouraging.
 3. Ground this in their natal chart and current Mahadasha/Antardasha period — this is
    real astrological data, not a guess. Do NOT mention specific transit positions,

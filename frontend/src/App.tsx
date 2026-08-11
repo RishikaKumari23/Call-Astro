@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ChatWindow } from './components/ChatWindow';
 import { ChatInput } from './components/ChatInput';
 import { ProfileCard } from './components/ProfileCard';
@@ -41,6 +41,7 @@ function App() {
   const [isResetting, setIsResetting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const seenSuggestions = useRef<Set<string>>(new Set());
   const [kundliPlanets, setKundliPlanets] = useState<any[] | null>(null);
   const [ascendantSign, setAscendantSign] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -164,7 +165,9 @@ function App() {
             setBirthPlace(event.birth_place);
             setLanguage(event.language);
             if (event.suggestions && Array.isArray(event.suggestions)) {
-              setSuggestions(event.suggestions);
+              const fresh = event.suggestions.filter((s: string) => !seenSuggestions.current.has(s)).slice(0, 3);
+              fresh.forEach((s: string) => seenSuggestions.current.add(s));
+              setSuggestions(fresh);
             }
             setTraceRefreshKey(prev => prev + 1);
           }
@@ -378,7 +381,7 @@ function App() {
           <ChatInput onSendMessage={handleSendMessage} disabled={isTyping} language={language} />
         </main>
         <aside className="hidden lg:block w-72 border-l border-slate-200 bg-slate-50 p-4 overflow-y-auto shrink-0">
-         <WeeklyGuidance sessionId={sessionId} />
+         <WeeklyGuidance sessionId={sessionId} language={language} />
          <ReasoningTrace sessionId={sessionId} refreshKey={traceRefreshKey} language={language} />
         </aside>
 
