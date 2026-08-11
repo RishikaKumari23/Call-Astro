@@ -53,8 +53,11 @@ Call-Astro/
 │   │   │   ├── indexer.py      # Document loader (PDF/DOCX/TXT/MD)
 │   │   │   └── vector_store.py # Local NumPy Vector Store
 │   │   ├── services/
-│   │   │   ├── chat_service.py # Core conversation coordinator
-│   │   │   └── llm_service.py  # Ollama API adapter
+│   │   │   ├── chat_service.py       # Core conversation coordinator
+│   │   │   ├── dashboard_service.py  # Weekly guidance & profile metrics
+│   │   │   ├── kundli_service.py     # Astrological calculations & external API
+│   │   │   ├── llm_service.py        # Ollama API adapter
+│   │   │   └── topic_service.py      # Pre-computed contextual follow-up questions
 │   │   ├── utils/
 │   │   │   └── logger.py       # Custom log layout
 │   │   └── main.py             # FastAPI bootstrap application
