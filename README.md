@@ -75,10 +75,18 @@ Call-Astro/
 │   ├── public/
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── ChatInput.tsx   # Interactive input bar
-│   │   │   ├── ChatWindow.tsx  # Messages list & auto-scroll view
-│   │   │   └── ProfileCard.tsx # Birth profile sidecard
-│   │   ├── App.tsx             # Main shell
+│   │   │   ├── ChatInput.tsx        # Interactive input bar
+│   │   │   ├── ChatWindow.tsx       # Messages list & auto-scroll view
+│   │   │   ├── EditDetailsModal.tsx # Modal to update profile info
+│   │   │   ├── KundliChart.tsx      # North Indian diamond chart renderer
+│   │   │   ├── LifeDashboard.tsx    # Main dashboard view (guidance, charts)
+│   │   │   ├── OnboardingForm.tsx   # Initial data collection form
+│   │   │   ├── ProfileCard.tsx      # Birth profile sidecard
+│   │   │   ├── QuickTopics.tsx      # Topic suggestion chips
+│   │   │   ├── ReasoningTrace.tsx   # Expandable AI logic transparency box
+│   │   │   ├── SouthIndianChart.tsx # South Indian square chart renderer
+│   │   │   └── WeeklyGuidance.tsx   # AI-generated weekly reflections
+│   │   ├── App.tsx                  # Main React shell and router
 │   │   ├── main.tsx            # React bootstrap
 │   │   └── index.css           # Global styles and tailwind import
 │   ├── tailwind.config.js
