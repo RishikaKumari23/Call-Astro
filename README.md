@@ -1,6 +1,6 @@
 # Call-Astro: Production-Ready RAG-Based AI Astrologer Chatbot
 
-Call-Astro is a production-ready, context-aware chatbot designed to behave exactly like an experienced Indian Vedic Astrologer during a WhatsApp or chat conversation. It communicates naturally in Hinglish, Hindi, or English, remembers user birth details (horoscope session state) in a local database, dynamically prompts for missing details, and responds with short, precise, and human-like predictions grounded in custom astrology books retrieved via a hybrid RAG (Retrieval-Augmented Generation) pipeline.
+Call-Astro is a production-ready, context-aware chatbot designed to behave exactly like an experienced Indian Vedic Astrologer during a WhatsApp or chat conversation. It communicates naturally in Hinglish, Hindi, or English, seamlessly loads user birth details collected via the Dashboard UI from a local database, and responds with short, precise, and human-like predictions grounded in custom astrology books retrieved via a hybrid RAG (Retrieval-Augmented Generation) pipeline.
 
 ---
 
@@ -9,8 +9,10 @@ Call-Astro is a production-ready, context-aware chatbot designed to behave exact
 - **Natural Conversational Astrologer**: Behaves like a real Indian astrologer, starting with:
   > *"🙏 Namaste! Main aapki kya seva kar sakta hoon?"*
 - **Automatic Language Detection**: Auto-detects and shifts replies between English, Hindi, and Hinglish dynamically.
-- **Smart Sequential Profile Collection**: Dynamically detects missing details (Date of Birth 📅, Birth Time ⏰, Birth Place 📍) and gathers them one by one.
+- **Dashboard Profile Management**: Users set their Date of Birth 📅, Time ⏰, Place 📍, and Language directly in the dashboard UI for instant, seamless chart generation.
 - **Conversational Memory**: Persists profile state and conversation history in an SQLite database.
+- **Deep Astrological Calculations**: Automatically computes exact planetary houses, Nakshatras, and Star Lords from APIs to provide highly accurate chart readings without LLM hallucinations.
+- **Smart Instant Suggestions**: Dynamically displays categorized, non-repeating contextual follow-up questions to keep users engaged.
 - **Hybrid RAG Pipeline**: Combines Vector Similarity Search (dense semantic embeddings via Ollama) and Lexical Matching (TF-IDF keyword score) to retrieve segments from scanned books.
 - **Local NumPy-based Vector Store**: Lightweight, fast, and robust vector search written in Python with no compiled C-library compilation dependencies (ideal for out-of-the-box Windows execution).
 - **Modern Minimal UI**: Minimalist, clean, white, mobile-friendly ChatGPT-style interface built in React + TypeScript + Tailwind CSS with auto-scroll and profile sidecards.
@@ -51,8 +53,14 @@ Call-Astro/
 │   │   │   ├── indexer.py      # Document loader (PDF/DOCX/TXT/MD)
 │   │   │   └── vector_store.py # Local NumPy Vector Store
 │   │   ├── services/
-│   │   │   ├── chat_service.py # Core conversation coordinator
-│   │   │   └── llm_service.py  # Ollama API adapter
+│   │   │   ├── chat_service.py       # Core conversation coordinator
+│   │   │   ├── dasha_api_service.py  # Computes Mahadasha and Antardasha timing periods
+│   │   │   ├── dashboard_service.py  # Weekly guidance & profile metrics
+│   │   │   ├── geocoding_service.py  # Converts birth place names to lat/long coordinates
+│   │   │   ├── kundli_service.py     # Astrological calculations & external API
+│   │   │   ├── llm_service.py        # Ollama API adapter
+│   │   │   ├── topic_service.py      # Pre-computed contextual follow-up questions
+│   │   │   └── yoga_service.py       # Detects classical astrological Yogas (Raj Yoga, etc.)
 │   │   ├── utils/
 │   │   │   └── logger.py       # Custom log layout
 │   │   └── main.py             # FastAPI bootstrap application
@@ -67,10 +75,18 @@ Call-Astro/
 │   ├── public/
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── ChatInput.tsx   # Interactive input bar
-│   │   │   ├── ChatWindow.tsx  # Messages list & auto-scroll view
-│   │   │   └── ProfileCard.tsx # Birth profile sidecard
-│   │   ├── App.tsx             # Main shell
+│   │   │   ├── ChatInput.tsx        # Interactive input bar
+│   │   │   ├── ChatWindow.tsx       # Messages list & auto-scroll view
+│   │   │   ├── EditDetailsModal.tsx # Modal to update profile info
+│   │   │   ├── KundliChart.tsx      # North Indian diamond chart renderer
+│   │   │   ├── LifeDashboard.tsx    # Main dashboard view (guidance, charts)
+│   │   │   ├── OnboardingForm.tsx   # Initial data collection form
+│   │   │   ├── ProfileCard.tsx      # Birth profile sidecard
+│   │   │   ├── QuickTopics.tsx      # Topic suggestion chips
+│   │   │   ├── ReasoningTrace.tsx   # Expandable AI logic transparency box
+│   │   │   ├── SouthIndianChart.tsx # South Indian square chart renderer
+│   │   │   └── WeeklyGuidance.tsx   # AI-generated weekly reflections
+│   │   ├── App.tsx                  # Main React shell and router
 │   │   ├── main.tsx            # React bootstrap
 │   │   └── index.css           # Global styles and tailwind import
 │   ├── tailwind.config.js
@@ -231,16 +247,11 @@ curl http://localhost:8000/api/ingest/status
 
 ## Example Conversations
 
-### Example 1: Profile Collection Sequence
+### Example 1: Direct Astrological Consultation
+*(User has already saved their Date of Birth, Time, and Place via the Dashboard Profile)*
 - **Bot**: "🙏 Namaste! Main aapki kya seva kar sakta hoon?"
 - **User**: "Career kaisa rahega?"
-- **Bot**: "Iska sahi vishleshan karne ke liye mujhe kuch janm vivaran chahiye. Kripya apna Date of Birth batayein. 📅"
-- **User**: "14-02-2003"
-- **Bot**: "Dhanyavaad. Kripya birth time bhi batayein. ⏰"
-- **User**: "5:30 PM"
-- **Bot**: "Ab sirf janm sthan (Birth Place) bata dijiye. 📍"
-- **User**: "Lucknow"
-- **Bot**: *(Analyzes details + RAG context and outputs)*: "Aapki Kundali ke anusar, aapka janm Kanya Lagna mein hua hai. Jupiter ka gochar aapke dasham bhav (career) ko prabhavit kar raha hai, jo aane wale samay mein naukri ke naye aur behtar avsar pradan karega. Shani ki upasthiti karm sthan mein mehnat mangti hai, par safalta sthayi hogi. 🌟"
+- **Bot**: *(Analyzes saved profile + exact planetary houses + RAG context instantly)*: "Aapki Kundali ke anusar, aapka janm Meen Lagna mein hua hai. Jupiter as your 10th Lord in Virgo (7th House) indicates strong career growth. Shani ki upasthiti 5th House mein mehnat mangti hai, par safalta sthayi hogi. Aapke bhagyodaya ka samay kareeb hai! 🌟"
 
 ---
 
@@ -249,7 +260,7 @@ curl http://localhost:8000/api/ingest/status
 1. **Ollama connection errors**:
    - Verify Ollama is running (`ollama serve` or open desktop app).
    - Ensure the LLM model is pulled: `ollama pull llama3`.
-2. **Missing `pypdf` warning**:
-   - If loading PDFs fails, run `pip install pypdf` (pre-installed inside the Docker image).
+2. **Missing `PyMuPDF` warning**:
+   - If loading PDFs fails, run `pip install PyMuPDF` (pre-installed inside the Docker image).
 3. **No responses or "Ollama model is not pulled"**:
    - Verify that your model name matching `.env` is exact. If you use a custom model like `mistral`, set `OLLAMA_LLM_MODEL=mistral`.
