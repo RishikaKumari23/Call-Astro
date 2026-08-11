@@ -1,6 +1,6 @@
 # Call-Astro: Production-Ready RAG-Based AI Astrologer Chatbot
 
-Call-Astro is a production-ready, context-aware chatbot designed to behave exactly like an experienced Indian Vedic Astrologer during a WhatsApp or chat conversation. It communicates naturally in Hinglish, Hindi, or English, remembers user birth details (horoscope session state) in a local database, dynamically prompts for missing details, and responds with short, precise, and human-like predictions grounded in custom astrology books retrieved via a hybrid RAG (Retrieval-Augmented Generation) pipeline.
+Call-Astro is a production-ready, context-aware chatbot designed to behave exactly like an experienced Indian Vedic Astrologer during a WhatsApp or chat conversation. It communicates naturally in Hinglish, Hindi, or English, seamlessly loads user birth details collected via the Dashboard UI from a local database, and responds with short, precise, and human-like predictions grounded in custom astrology books retrieved via a hybrid RAG (Retrieval-Augmented Generation) pipeline.
 
 ---
 
@@ -9,7 +9,7 @@ Call-Astro is a production-ready, context-aware chatbot designed to behave exact
 - **Natural Conversational Astrologer**: Behaves like a real Indian astrologer, starting with:
   > *"🙏 Namaste! Main aapki kya seva kar sakta hoon?"*
 - **Automatic Language Detection**: Auto-detects and shifts replies between English, Hindi, and Hinglish dynamically.
-- **Smart Sequential Profile Collection**: Dynamically detects missing details (Date of Birth 📅, Birth Time ⏰, Birth Place 📍) and gathers them one by one.
+- **Dashboard Profile Management**: Users set their Date of Birth 📅, Time ⏰, Place 📍, and Language directly in the dashboard UI for instant, seamless chart generation.
 - **Conversational Memory**: Persists profile state and conversation history in an SQLite database.
 - **Deep Astrological Calculations**: Automatically computes exact planetary houses, Nakshatras, and Star Lords from APIs to provide highly accurate chart readings without LLM hallucinations.
 - **Smart Instant Suggestions**: Dynamically displays categorized, non-repeating contextual follow-up questions to keep users engaged.
@@ -233,16 +233,11 @@ curl http://localhost:8000/api/ingest/status
 
 ## Example Conversations
 
-### Example 1: Profile Collection Sequence
+### Example 1: Direct Astrological Consultation
+*(User has already saved their Date of Birth, Time, and Place via the Dashboard Profile)*
 - **Bot**: "🙏 Namaste! Main aapki kya seva kar sakta hoon?"
 - **User**: "Career kaisa rahega?"
-- **Bot**: "Iska sahi vishleshan karne ke liye mujhe kuch janm vivaran chahiye. Kripya apna Date of Birth batayein. 📅"
-- **User**: "14-02-2003"
-- **Bot**: "Dhanyavaad. Kripya birth time bhi batayein. ⏰"
-- **User**: "5:30 PM"
-- **Bot**: "Ab sirf janm sthan (Birth Place) bata dijiye. 📍"
-- **User**: "Lucknow"
-- **Bot**: *(Analyzes details + RAG context and outputs)*: "Aapki Kundali ke anusar, aapka janm Kanya Lagna mein hua hai. Jupiter ka gochar aapke dasham bhav (career) ko prabhavit kar raha hai, jo aane wale samay mein naukri ke naye aur behtar avsar pradan karega. Shani ki upasthiti karm sthan mein mehnat mangti hai, par safalta sthayi hogi. 🌟"
+- **Bot**: *(Analyzes saved profile + exact planetary houses + RAG context instantly)*: "Aapki Kundali ke anusar, aapka janm Meen Lagna mein hua hai. Jupiter as your 10th Lord in Virgo (7th House) indicates strong career growth. Shani ki upasthiti 5th House mein mehnat mangti hai, par safalta sthayi hogi. Aapke bhagyodaya ka samay kareeb hai! 🌟"
 
 ---
 
