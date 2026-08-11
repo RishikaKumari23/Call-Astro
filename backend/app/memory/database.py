@@ -43,6 +43,9 @@ class MemoryDatabase:
                     dashboard_date TEXT,
                     weekly_guidance TEXT,
                     weekly_week_start TEXT,
+                    yoga_text TEXT,
+                    dasha_tree_raw TEXT,
+                    topic_cache TEXT,
                     latitude REAL,
                     longitude REAL,
                     updated_at TEXT
@@ -67,6 +70,9 @@ class MemoryDatabase:
                 ("dashboard_date", "TEXT"),
                 ("weekly_guidance", "TEXT"),
                 ("weekly_week_start", "TEXT"),
+                ("yoga_text", "TEXT"),
+                ("dasha_tree_raw", "TEXT"),
+                ("topic_cache", "TEXT"),
             ]:
                 if col_name not in existing_cols:
                     cursor.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_type}")
@@ -98,11 +104,12 @@ class MemoryDatabase:
                 INSERT INTO sessions (session_id, dob, birth_time, birth_place, language,
                                        pending_field, kundli_data, kundli_raw, kundli_dasha, kundli_divisional,
                                        kundli_full_raw, topic_memory, last_reasoning_trace, dashboard_prediction,
-                                       dashboard_lucky_color, dashboard_date, latitude, longitude, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       dashboard_lucky_color, dashboard_date, yoga_text, dasha_tree_raw, topic_cache,
+                                       latitude, longitude, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (session_id, None, None, None, 'Hinglish', None, None, None, None, None,
-                 None, None, None, None, None, None, None, None, now_str)
+                 None, None, None, None, None, None, None, None, None, None, None, now_str)
             )
             conn.commit()
 
@@ -113,6 +120,7 @@ class MemoryDatabase:
                 "kundli_full_raw": None,
                 "topic_memory": None, "last_reasoning_trace": None,
                 "dashboard_prediction": None, "dashboard_lucky_color": None, "dashboard_date": None,
+                "yoga_text": None, "dasha_tree_raw": None, "topic_cache": None,
                 "latitude": None, "longitude": None, "updated_at": now_str
             }
 
@@ -125,13 +133,13 @@ class MemoryDatabase:
             "latitude", "longitude", "pending_field", "kundli_data", "kundli_raw", "kundli_dasha",
             "kundli_divisional", "kundli_full_raw", "topic_memory", "last_reasoning_trace",
             "dashboard_prediction", "dashboard_lucky_color", "dashboard_date",
-            "weekly_guidance", "weekly_week_start"
+            "weekly_guidance", "weekly_week_start","yoga_text", "dasha_tree_raw", "topic_cache"
         }
         nullable_ok = {
             "pending_field", "kundli_data", "kundli_raw", "kundli_dasha", "kundli_divisional",
             "kundli_full_raw", "topic_memory", "last_reasoning_trace",
             "dashboard_prediction", "dashboard_lucky_color", "dashboard_date",
-            "weekly_guidance", "weekly_week_start"
+            "weekly_guidance", "weekly_week_start","yoga_text", "dasha_tree_raw", "topic_cache"
         }
         fields_to_update = {
             k: v for k, v in updates.items()

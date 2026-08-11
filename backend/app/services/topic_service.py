@@ -1,3 +1,6 @@
+# ============================================================
+# topic_service.py (updated)
+# ============================================================
 from typing import Optional, List, Dict
 from app.services.kundli_service import get_house_lord
 
@@ -16,16 +19,12 @@ TOPIC_CHART_FACTORS = {
         "divisional_chart": "D9",
     },
     "health": {
-        # 1st house (Lagna) = physical body & vitality — primary health indicator.
-        # 6th house governs disease specifically; both are checked via search_bias.
         "house": 1, "planets": ["Saturn", "Mars", "Moon"],
         "keywords": ["health", "sehat", "illness", "disease", "body", "bimari"],
         "search_bias": "health disease 1st house 6th house Lagna Saturn Mars Moon",
         "divisional_chart": None,
     },
     "finance": {
-        # 11th house = income & gains (what people usually mean by "finance").
-        # 2nd house = accumulated wealth/savings — covered in search_bias.
         "house": 11, "planets": ["Jupiter", "Venus", "Mercury"],
         "keywords": ["money", "finance", "paisa", "wealth", "income", "dhan", "paise"],
         "search_bias": "wealth money finance income gains 2nd house 11th house Jupiter Venus Mercury",
@@ -56,7 +55,7 @@ TOPIC_RELEVANT_BOOKS = {
     "marriage": [
         "Timing of Marriage by Transits and Jaimini Astrology (2)",
         "Timing marriage",
-        "Jupiter_Transits_paryaya",  # from Jyotish_2015_Parthasarathy_Vinukonda_Jupiter_Transits_paryaya
+        "Jupiter_Transits_paryaya",
     ],
     "health": [
         "Cancer timing Through Transits_S.Rath (1)",
@@ -67,14 +66,14 @@ TOPIC_RELEVANT_BOOKS = {
     ],
     "education": [
         "Jyotish_AIFAS_Timing of events through Dasha and transit",
-        "Stars_Days_&_Transit_In_Vedic_Astrology",  # from Jyotish_2017_S_P_Bhagat
+        "Stars_Days_&_Transit_In_Vedic_Astrology",
     ],
     "timing_general": [
         "Transit short cuts",
         "Transit Short-Cuts_A Practical Tool_Bepin Behari (2)",
         "Importance of TRANSIT Astrology",
-        "Microscopy_of_Transiting_Planets",  # matches all 4 Baldev_Bhatia volumes
-        "Celestial_Transits_Or_Grah_Gochar",  # Jyotish_2024_Madhusudan_Dusi
+        "Microscopy_of_Transiting_Planets",
+        "Celestial_Transits_Or_Grah_Gochar",
         "Transit of Nakshatra Dasa Lord",
         "Transit of Rahu-Ketu & the Fortunes",
         "Saturn transit in Square houses",
@@ -89,9 +88,21 @@ NATURAL_BENEFICS = {"Jupiter", "Venus", "Mercury", "Moon"}
 NATURAL_MALEFICS = {"Saturn", "Mars", "Rahu", "Ketu"}
 
 # Kendra houses: 1, 4, 7, 10 | Trikona houses: 1, 5, 9
-# House 11 is an Upachaya (growth) house, NOT a Kendra or Trikona.
 KENDRA_TRIKONA_HOUSES = {1, 4, 5, 7, 9, 10}       # strong/supportive houses
 DUSTHANA_HOUSES = {6, 8, 12}                       # weak/challenging houses
+
+# ------------------------------------------------------------------
+# Evidence Voting — relative weight given to each independent source
+# when combining them into one confidence score. Dasha and Chart carry
+# full weight since they're the primary classical indicators; Yoga is
+# a secondary/reinforcing signal.
+# ------------------------------------------------------------------
+EVIDENCE_WEIGHTS = {
+    "dasha": 1.0,
+    "chart": 1.0,
+    "yoga": 0.6,
+}
+
 
 def classify_topic(message: str) -> Optional[str]:
     """Simple keyword-based topic classifier."""
@@ -544,7 +555,6 @@ def build_explanation_footer(topic: Optional[str], ascendant_sign: Optional[str]
     return labels.get(language, labels["Hinglish"])
 
 
-
 def _score_dasha_signal(dasha_info: Optional[dict]) -> int:
     """+1 if current Dasha lord(s) are naturally benefic, -1 if malefic, 0 if mixed/unknown."""
     if not dasha_info:
@@ -560,7 +570,6 @@ def _score_dasha_signal(dasha_info: Optional[dict]) -> int:
             score += 1
         elif lord in NATURAL_MALEFICS:
             score -= 1
-    # Clamp to -1/0/+1 so Mahadasha+Antardasha don't just double-count the same direction
     return (score > 0) - (score < 0)
 
 
@@ -601,6 +610,32 @@ def _score_chart_signal(topic: str, planets: List[dict], ascendant_sign: str) ->
     return (score > 0) - (score < 0)
 
 
+def _score_yoga_signal(topic: Optional[str], yoga_text: str) -> int:
+    """+1 if a classically strong yoga (Raj/Dhana/Gajakesari/Budhaditya/Chandra-Mangal)
+    is present, or a topic-significator planet is exalted; -1 if a topic-significator
+    planet is debilitated. 0 if yoga_text is empty or has no topic-relevant signal.
+    This reuses yoga_text that's already pre-computed once per birth chart —
+    no new computation, just a new lens on existing data."""
+    if not topic or not yoga_text:
+        return 0
+
+    config = TOPIC_CHART_FACTORS.get(topic, {})
+    sig_planets = set(config.get("planets", []))
+    text_lower = yoga_text.lower()
+
+    score = 0
+    if any(name in text_lower for name in ("raj yoga", "dhana yoga", "gajakesari", "budhaditya")):
+        score += 1
+
+    for planet in sig_planets:
+        if f"{planet.lower()} exalted" in text_lower:
+            score += 1
+        if f"{planet.lower()} debilitated" in text_lower:
+            score -= 1
+
+    return (score > 0) - (score < 0)
+
+
 def build_consistency_check(topic: Optional[str], planets: List[dict], ascendant_sign: Optional[str],
                              dasha_info: Optional[dict]) -> Optional[dict]:
     """Compare Dasha timing vs. chart placement for this topic. Returns None
@@ -612,7 +647,7 @@ def build_consistency_check(topic: Optional[str], planets: List[dict], ascendant
     chart_score = _score_chart_signal(topic, planets, ascendant_sign)
 
     if dasha_score == 0 and chart_score == 0:
-        return None  # not enough signal either way to say anything meaningful
+        return None
 
     if dasha_score > 0 and chart_score > 0:
         alignment = "aligned_positive"
@@ -621,7 +656,7 @@ def build_consistency_check(topic: Optional[str], planets: List[dict], ascendant
     elif (dasha_score > 0 and chart_score < 0) or (dasha_score < 0 and chart_score > 0):
         alignment = "mixed"
     else:
-        alignment = "leaning"  # one signal neutral, other has a direction
+        alignment = "leaning"
 
     return {
         "alignment": alignment,
@@ -649,13 +684,102 @@ def build_consistency_note(check: Optional[dict], topic: Optional[str]) -> str:
                 f"(one supportive, one challenging). Do NOT force a single confident verdict — acknowledge both "
                 f"sides honestly in your own natural voice, e.g. 'is supported by X but a bit delayed by Y'. "
                 f"This is genuine nuance in the chart, not uncertainty on your part.")
-    # "leaning"
     return (f"Signal check for {topic}: One signal (Dasha or chart) leans positive/negative, the other is neutral. "
             f"You may lean toward that direction but keep slightly softer certainty than a fully aligned reading.")
-    
-    # ---------------------------------------------------------------------------
-# Explainable AI — Step-by-Step Reasoning Trace
-# ---------------------------------------------------------------------------
+
+
+# ------------------------------------------------------------------
+# Evidence Voting — replaces the binary "aligned/mixed" check with a
+# weighted multi-source vote (Dasha, Chart placement, Yogas), producing
+# an explainable confidence score instead of just an alignment label.
+# ------------------------------------------------------------------
+def build_evidence_vote(
+    topic: Optional[str],
+    planets: List[dict],
+    ascendant_sign: Optional[str],
+    dasha_info: Optional[dict],
+    yoga_text: str = "",
+) -> Optional[Dict]:
+    """Each evidence source independently 'votes' favorable/challenging/neutral
+    for this topic. Votes are combined with fixed weights into a 0-100%
+    confidence score plus a verdict. Returns None if there's no chart data
+    to vote on at all (distinct from a genuine 'neutral' vote)."""
+    if not topic:
+        return None
+    if not planets or not ascendant_sign:
+        return None
+
+    votes = [
+        {
+            "source": "Dasha Timing",
+            "vote": _score_dasha_signal(dasha_info),
+            "weight": EVIDENCE_WEIGHTS["dasha"],
+        },
+        {
+            "source": "Chart Placement",
+            "vote": _score_chart_signal(topic, planets, ascendant_sign),
+            "weight": EVIDENCE_WEIGHTS["chart"],
+        },
+        {
+            "source": "Yogas",
+            "vote": _score_yoga_signal(topic, yoga_text),
+            "weight": EVIDENCE_WEIGHTS["yoga"],
+        },
+    ]
+
+    if all(v["vote"] == 0 for v in votes):
+        return None  # no source has any signal — nothing meaningful to report
+
+    weighted_sum = sum(v["vote"] * v["weight"] for v in votes)
+    max_possible = sum(v["weight"] for v in votes)
+    raw = (weighted_sum / max_possible) if max_possible else 0.0  # -1..1
+    confidence_pct = max(0, min(100, round(50 + raw * 50)))       # 0=fully negative, 50=neutral, 100=fully positive
+
+    positive = sum(1 for v in votes if v["vote"] > 0)
+    negative = sum(1 for v in votes if v["vote"] < 0)
+    neutral = sum(1 for v in votes if v["vote"] == 0)
+
+    if positive >= 2 and positive > negative:
+        verdict = "favorable"
+    elif negative >= 2 and negative > positive:
+        verdict = "challenging"
+    elif positive > 0 and negative > 0:
+        verdict = "mixed"
+    else:
+        verdict = "leaning"
+
+    return {
+        "votes": votes,
+        "positive_count": positive,
+        "negative_count": negative,
+        "neutral_count": neutral,
+        "confidence_pct": confidence_pct,
+        "verdict": verdict,
+    }
+
+
+def format_evidence_vote_for_prompt(vote: Optional[Dict], topic: Optional[str]) -> str:
+    """Render the vote as an instruction block for the LLM — this is what
+    actually calibrates the model's stated certainty against real evidence
+    strength instead of a fixed 'always sound confident' rule."""
+    if not vote or not topic:
+        return ""
+
+    lines = [f"Evidence Vote for {topic} (each source scored independently):"]
+    for v in vote["votes"]:
+        direction = "Supportive" if v["vote"] > 0 else ("Challenging" if v["vote"] < 0 else "No clear signal")
+        lines.append(f"- {v['source']}: {direction}")
+
+    lines.append(
+        f"Result: {vote['positive_count']} supportive, {vote['negative_count']} challenging, "
+        f"{vote['neutral_count']} neutral — confidence score {vote['confidence_pct']}%. "
+        f"Calibrate your certainty to this: 70%+ → speak with strong confidence; "
+        f"40-70% → grounded but slightly softer confidence; below 40% or verdict 'mixed' → "
+        f"be honest about the mixed picture instead of forcing a single confident verdict."
+    )
+    return "\n".join(lines)
+
+
 def build_reasoning_trace(
     topic: Optional[str],
     ascendant_sign: Optional[str],
@@ -663,6 +787,7 @@ def build_reasoning_trace(
     dasha_info: Optional[dict],
     consistency_check: Optional[dict],
     rag_sources: Optional[List[str]] = None,
+    evidence_vote: Optional[Dict] = None,
 ) -> List[dict]:
     """Assemble a numbered, inspectable reasoning chain from data already
     computed elsewhere in the pipeline. Each step is {step, title, detail} —
@@ -674,7 +799,6 @@ def build_reasoning_trace(
     steps = []
     step_num = 1
 
-    # Step 1 — current timing
     if dasha_info:
         maha = dasha_info.get("current_mahadasha", {})
         antar = dasha_info.get("current_antardasha", {})
@@ -684,7 +808,6 @@ def build_reasoning_trace(
         steps.append({"step": step_num, "title": "Current Dasha Period", "detail": detail})
         step_num += 1
 
-    # Step 2 — relevant house
     config = TOPIC_CHART_FACTORS.get(topic, {})
     house_num = config.get("house")
     if house_num:
@@ -698,7 +821,6 @@ def build_reasoning_trace(
         steps.append({"step": step_num, "title": f"Relevant House ({house_num}th)", "detail": detail})
         step_num += 1
 
-    # Step 3 — significator planets and their placement
     sig_planets = config.get("planets", [])
     if sig_planets and planets:
         placements = []
@@ -716,7 +838,6 @@ def build_reasoning_trace(
             })
             step_num += 1
 
-    # Step 4 — divisional chart used
     div_chart = config.get("divisional_chart")
     if div_chart:
         purpose_map = {"D9": "marriage", "D10": "career", "D24": "education", "D7": "children"}
@@ -726,7 +847,6 @@ def build_reasoning_trace(
         })
         step_num += 1
 
-    # Step 5 — consistency/signal check
     if consistency_check:
         alignment = consistency_check.get("alignment")
         alignment_labels = {
@@ -741,9 +861,23 @@ def build_reasoning_trace(
         })
         step_num += 1
 
-    # Step 6 — classical sources referenced
+    # Evidence Vote step — surfaces the weighted multi-source confidence
+    # score directly in the explainability panel, not just in the prompt.
+    if evidence_vote:
+        vote_summary = ", ".join(
+            f"{v['source']}: {'Supportive' if v['vote'] > 0 else ('Challenging' if v['vote'] < 0 else 'Neutral')}"
+            for v in evidence_vote["votes"]
+        )
+        detail = (
+            f"{vote_summary}. Overall confidence: {evidence_vote['confidence_pct']}% "
+            f"({evidence_vote['positive_count']} supportive / {evidence_vote['negative_count']} challenging "
+            f"/ {evidence_vote['neutral_count']} neutral) — verdict: {evidence_vote['verdict']}."
+        )
+        steps.append({"step": step_num, "title": "Evidence Vote", "detail": detail})
+        step_num += 1
+
     if rag_sources:
-        unique_sources = list(dict.fromkeys(rag_sources))[:3]  # dedupe, cap at 3
+        unique_sources = list(dict.fromkeys(rag_sources))[:3]
         steps.append({
             "step": step_num, "title": "Classical References Consulted",
             "detail": ", ".join(unique_sources)
@@ -769,12 +903,10 @@ def format_reasoning_trace_text(steps: List[dict], language: str = "Hinglish") -
         lines.append(f"{s['step']}. {s['title']}\n   {s['detail']}")
     return "\n\n".join(lines)
 
+
 def rank_favorable_periods(upcoming_periods: List[dict], topic: str, top_n: int = 3) -> List[dict]:
     """Ranks upcoming Antardasha periods by how many of the topic's
-    significator planets are involved (Mahadasha lord + Antardasha lord).
-    A period where BOTH lords are significators for this topic ranks
-    highest — e.g. Venus Mahadasha + Jupiter Antardasha for a marriage
-    question, since both are marriage significators."""
+    significator planets are involved (Mahadasha lord + Antardasha lord)."""
     config = TOPIC_CHART_FACTORS.get(topic)
     if not config or not upcoming_periods:
         return []
@@ -784,7 +916,7 @@ def rank_favorable_periods(upcoming_periods: List[dict], topic: str, top_n: int 
     for period in upcoming_periods:
         score = 0
         if period.get("mahadasha") in significators:
-            score += 2  # Mahadasha match weighted higher — it's the dominant influence
+            score += 2
         if period.get("antardasha") in significators:
             score += 1
         if score > 0:
@@ -801,10 +933,10 @@ def format_dasha_timeline_for_prompt(upcoming_periods: List[dict], favorable_per
         return ""
 
     lines = ["Upcoming Dasha Periods (next few years):"]
-    for p in upcoming_periods[:8]:  # cap to keep prompt size reasonable
+    for p in upcoming_periods[:8]:
         maha = p.get("mahadasha", "")
         antar = p.get("antardasha", "")
-        start = p.get("start", "").split(" ")[0]  # date only, drop time
+        start = p.get("start", "").split(" ")[0]
         end = p.get("end", "").split(" ")[0]
         lines.append(f"- {maha} Mahadasha / {antar} Antardasha: {start} to {end}")
 
@@ -817,12 +949,8 @@ def format_dasha_timeline_for_prompt(upcoming_periods: List[dict], favorable_per
             lines.append(f"- {maha}/{antar}: starting {start} (strong match for this question)")
 
     return "\n".join(lines)
-    
-# ---------------------------------------------------------------------------
-# Missing Evidence Detector — checks what data the system actually has for
-# this topic before the LLM generates a response, so the prompt can be
-# honest about gaps instead of the model silently filling them in.
-# ---------------------------------------------------------------------------
+
+
 def build_missing_evidence_note(
     topic: Optional[str],
     planets: List[dict],
@@ -877,4 +1005,4 @@ def build_missing_evidence_note(
         f"Where evidence is missing, do not invent specifics for it — either omit that angle "
         f"entirely or speak in slightly more general terms for that part only, while still "
         f"staying confident about what IS available."
-    )    
+    )
