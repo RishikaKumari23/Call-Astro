@@ -54,10 +54,13 @@ Call-Astro/
 │   │   │   └── vector_store.py # Local NumPy Vector Store
 │   │   ├── services/
 │   │   │   ├── chat_service.py       # Core conversation coordinator
+│   │   │   ├── dasha_api_service.py  # Computes Mahadasha and Antardasha timing periods
 │   │   │   ├── dashboard_service.py  # Weekly guidance & profile metrics
+│   │   │   ├── geocoding_service.py  # Converts birth place names to lat/long coordinates
 │   │   │   ├── kundli_service.py     # Astrological calculations & external API
 │   │   │   ├── llm_service.py        # Ollama API adapter
-│   │   │   └── topic_service.py      # Pre-computed contextual follow-up questions
+│   │   │   ├── topic_service.py      # Pre-computed contextual follow-up questions
+│   │   │   └── yoga_service.py       # Detects classical astrological Yogas (Raj Yoga, etc.)
 │   │   ├── utils/
 │   │   │   └── logger.py       # Custom log layout
 │   │   └── main.py             # FastAPI bootstrap application
