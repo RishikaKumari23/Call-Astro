@@ -3,26 +3,14 @@ Event Timing Engine — generic, topic-pluggable hierarchical Dasha-window
 search. The engine itself is topic-agnostic; each topic supplies its own
 candidate-planet hierarchy and match-mode via TOPIC_RULES below.
 
-STILL UNCONFIRMED (do not present these as final until your professor
-confirms them):
-  - Whether Mahadasha+Antardasha BOTH need to be candidates ("and") or
-    EITHER is sufficient ("or"). Defaulting to "and" per his quoted wording,
-    but this is a guess pending his explicit answer.
-  - What exactly makes a found window "valid" (currently: any window found
-    counts as valid — no additional filter applied yet).
-  - Early/late marriage bias weighting — not implemented.
-  - Career hierarchy — explicitly a placeholder, not his rules.
 
-TRANSIT LAYER NOT IMPLEMENTED: no live transit data source confirmed.
-Windows returned here are Dasha-based candidates only, not final predictions.
 """
 from typing import List, Dict, Optional, Callable
 from app.services.kundli_service import get_house_lord
 from app.services.topic_service import get_house_for_sign
 from app.services.aspect_service import get_planets_aspecting_house
 from app.utils.logger import logger
-
-
+from app.services.marriage_tendency_service import classify_marriage_tendency, rank_windows_by_tendency, format_tendency_for_prompt
 # ---------------------------------------------------------------------------
 # Per-topic candidate-planet hierarchy builders.
 # Each returns a list of levels, tried in order. Each level is a dict:
@@ -152,22 +140,22 @@ def _filter_valid_windows(windows: List[Dict], topic: str) -> List[Dict]:
     hierarchy-search logic that calls this."""
     return windows
 
-
 def find_candidate_windows(topic: str, planets: List[dict], ascendant_sign: str,
                              flattened_periods: List[Dict]) -> Dict:
-    """
-    Hierarchical search: tries Level 1 first. Only proceeds to Level 2/3 if
-    Level 1 produces NO VALID windows (not just "no windows found" — those
-    are now distinct checks, per the fix below).
-    """
     levels = get_candidate_levels(topic, planets, ascendant_sign)
-    if not levels:
-        return {"windows": [], "level_used": None, "candidate_planets": [], "supported": False, "topic_confirmed": _is_topic_confirmed(topic)}
-
     match_mode = _get_match_mode(topic)
+
+    logger.info(f"[EventTiming] Topic: {topic}")
+    logger.info(f"[EventTiming] Mahadasha/Antardasha matching mode: {match_mode.upper()}")
+
+    if not levels:
+        logger.info(f"[EventTiming] No candidate builder for topic '{topic}' — skipping")
+        return {"windows": [], "level_used": None, "candidate_planets": [], "supported": False, "topic_confirmed": _is_topic_confirmed(topic), "tendency": None}
 
     for level_info in levels:
         candidates = level_info["planets"]
+        logger.info(f"[EventTiming] Level {level_info['level']} ({level_info['label']}): candidates = {sorted(candidates) if candidates else 'none'}")
+
         if not candidates:
             continue
 
@@ -175,11 +163,23 @@ def find_candidate_windows(topic: str, planets: List[dict], ascendant_sign: str,
         valid_windows = _filter_valid_windows(found_windows, topic)
 
         if valid_windows:
-            logger.info(
-                f"Event timing: found {len(valid_windows)} valid window(s) at level "
-                f"{level_info['level']} ({level_info['label']}) for candidates {candidates}, "
-                f"match_mode={match_mode}"
-            )
+            # Early/late tendency ranking — marriage only for now, since
+            # that's the only confirmed-topic concept discussed so far.
+            tendency_result = None
+            if topic == "marriage":
+                tendency_result = classify_marriage_tendency(planets, ascendant_sign)
+                valid_windows = rank_windows_by_tendency(valid_windows, tendency_result["tendency"])
+                logger.info(f"[EventTiming] Marriage tendency: {tendency_result['tendency']} (confirmed={tendency_result['confirmed']}) — {tendency_result['reasoning']}")
+
+            logger.info(f"[EventTiming] Hierarchy level used: {level_info['level']}")
+            logger.info(f"[EventTiming] Candidate planets: {', '.join(sorted(candidates))}")
+            logger.info("[EventTiming] Candidate Dasha windows (labeled as candidates, NOT final predictions):")
+            for w in valid_windows[:5]:
+                start = w.get("start", "").split(" ")[0]
+                end = w.get("end", "").split(" ")[0]
+                logger.info(f"[EventTiming]   {w.get('mahadasha')}/{w.get('antardasha')}: {start} -> {end} (score {w['match_score']})")
+            logger.info("[EventTiming] Transit confirmation: unavailable")
+
             return {
                 "windows": valid_windows,
                 "level_used": level_info["level"],
@@ -187,11 +187,12 @@ def find_candidate_windows(topic: str, planets: List[dict], ascendant_sign: str,
                 "candidate_planets": list(candidates),
                 "supported": True,
                 "topic_confirmed": _is_topic_confirmed(topic),
+                "tendency": tendency_result,
             }
 
-    logger.info(f"Event timing: no supported window found for topic '{topic}' at any hierarchy level")
-    return {"windows": [], "level_used": None, "candidate_planets": [], "supported": False, "topic_confirmed": _is_topic_confirmed(topic)}
-
+    logger.info(f"[EventTiming] No supported window found for topic '{topic}' at any hierarchy level")
+    logger.info("[EventTiming] Transit confirmation: unavailable")
+    return {"windows": [], "level_used": None, "candidate_planets": [], "supported": False, "topic_confirmed": _is_topic_confirmed(topic), "tendency": None}
 
 def format_event_timing_for_prompt(result: Dict, topic: str, language: str = "Hinglish") -> str:
     if not result.get("supported"):
@@ -206,17 +207,24 @@ def format_event_timing_for_prompt(result: Dict, topic: str, language: str = "Hi
     confirmation_note = "" if result.get("topic_confirmed") else " [NOTE: this topic's rule hierarchy is a placeholder, not yet confirmed against classical sources — treat with extra caution]"
 
     lines = [
-        f"Event Timing Analysis for {topic} (based on {result['level_label']}, "
-        f"candidate planets: {', '.join(result['candidate_planets'])}){confirmation_note}:"
+        f"Candidate Dasha Windows for {topic} (NOT a final prediction — based on "
+        f"{result['level_label']}, candidate planets: {', '.join(result['candidate_planets'])}){confirmation_note}:"
     ]
+
+    tendency_result = result.get("tendency")
+    if tendency_result:
+        lines.append(format_tendency_for_prompt(tendency_result))
+        lines.append(f"Windows below are ordered according to this {tendency_result['tendency']} tendency.")
+
     for w in result["windows"][:5]:
         start = w.get("start", "").split(" ")[0]
         end = w.get("end", "").split(" ")[0]
         lines.append(f"- {w.get('mahadasha')}/{w.get('antardasha')}: {start} to {end} (match strength: {w['match_score']})")
 
     lines.append(
-        "These are candidate Dasha windows based on real chart factors and Dasha timing — "
-        "NOT confirmed by planetary transits (transit data is not available). Present them "
-        "as the strongest indicated periods, not as certainties."
+        "These are candidate Dasha windows only — NOT confirmed by planetary transits "
+        "(transit data is not available) and the tendency ranking above uses placeholder "
+        "rules pending confirmation. Present the top window as the strongest CANDIDATE "
+        "indication, not a certainty."
     )
     return "\n".join(lines)
