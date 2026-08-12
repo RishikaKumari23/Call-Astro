@@ -23,7 +23,6 @@ from app.services.dasha_api_service import dasha_api_service
 from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
 from app.services.event_timing_service import find_candidate_windows, format_event_timing_for_prompt, TOPIC_RULES
 
-
 class ChatService:
     def __init__(self):
         self.embeddings_provider = EmbeddingsProvider()
@@ -133,8 +132,8 @@ class ChatService:
 
     # ------------------------------------------------------------------
     # Per-topic cache — bundles emphasis/divisional/consistency/missing-
-    # evidence/timeline/evidence_vote/event_timing into ONE JSON blob keyed
-    # by topic, so asking the SAME topic again in a session reuses everything.
+    # evidence/timeline/evidence_vote into ONE JSON blob keyed by topic,
+    # so asking the SAME topic again in a session reuses everything instantly.
     # ------------------------------------------------------------------
     def _get_topic_cache(self, session: Dict, topic: str) -> Optional[Dict]:
         raw = session.get("topic_cache")
@@ -159,12 +158,9 @@ class ChatService:
 
     def _get_topic_bundle(self, session_id: str, session: Dict, topic: Optional[str], language: str) -> Dict[str, Any]:
         """Returns {emphasis, divisional, consistency, missing_evidence,
-        timeline, evidence_vote, event_timing} for this topic — from cache
-        if already computed this session, otherwise computes once and caches."""
-        empty = {
-            "emphasis": "", "divisional": "", "consistency": "", "missing_evidence": "",
-            "timeline": "", "evidence_vote": None, "event_timing": ""
-        }
+        timeline, evidence_vote} for this topic — from cache if already
+        computed this session, otherwise computes once and caches."""
+        empty = {"emphasis": "", "divisional": "", "consistency": "", "missing_evidence": "", "timeline": "", "evidence_vote": None, "event_timing": ""}
         if not topic:
             return empty
 
@@ -176,13 +172,12 @@ class ChatService:
             if "event_timing" not in cached:
                 cached["event_timing"] = ""
             return cached
+        
 
         bundle = dict(empty)
         try:
             cached_raw = session.get("kundli_raw")
             cached_dasha = session.get("kundli_dasha")
-            planets = []
-            ascendant_sign = None
             if cached_raw:
                 parsed = json.loads(cached_raw)
                 planets = parsed.get("planets", [])
@@ -219,29 +214,20 @@ class ChatService:
                     topic, planets, ascendant_sign, dasha_info, bundle["divisional"]
                 )
 
+
             bundle["timeline"] = self._get_dasha_timeline(session_id, session, topic, language)
-            logger.info(f"[EventTiming DEBUG] topic={topic}")
-            logger.info(f"[EventTiming DEBUG] TOPIC_RULES match={topic in TOPIC_RULES}")
-            logger.info(f"[EventTiming DEBUG] cached_raw exists={bool(cached_raw)}")
-            logger.info(f"[EventTiming DEBUG] dasha_tree_raw exists={bool(session.get('dasha_tree_raw'))}")
-            # Hierarchical event-timing search — only for topics with a
-            # defined candidate hierarchy in TOPIC_RULES (currently marriage,
-            # career-as-placeholder). Reuses the SAME dasha_tree_raw cache
-            # that _get_dasha_timeline just populated above — no extra fetch.
+
             if topic in TOPIC_RULES and cached_raw:
-                logger.info("[EventTiming DEBUG] ENTERING EVENT TIMING BLOCK")
                 try:
                     cached_tree_raw = session.get("dasha_tree_raw")
                     if cached_tree_raw:
                         dasha_tree = json.loads(cached_tree_raw)
                         flattened = dasha_api_service.flatten_periods(dasha_tree, level="antardasha")
-                        logger.info(f"[EventTiming DEBUG] Flattened Dasha periods: {len(flattened)}")
                         if planets and ascendant_sign:
                             timing_result = find_candidate_windows(topic, planets, ascendant_sign, flattened)
                             bundle["event_timing"] = format_event_timing_for_prompt(timing_result, topic, language)
                 except Exception as timing_err:
                     logger.error(f"Event timing search failed: {timing_err}")
-
         except Exception as e:
             logger.error(f"Topic bundle build failed for '{topic}': {e}")
 
@@ -297,11 +283,11 @@ class ChatService:
     def _get_yoga_text(self, session: Dict) -> str:
         return session.get("yoga_text") or ""
 
+   
     def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str,
                                    yoga_text: str, missing_evidence: str = "", event_timing: str = "") -> str:
         parts = [p for p in [kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence, event_timing] if p]
         return "\n\n".join(parts)
-
     # ------------------------------------------------------------------
     # Response Novelty Checker
     # ------------------------------------------------------------------
@@ -484,6 +470,7 @@ class ChatService:
                 kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence,
                 event_timing=event_timing_str
             )
+
             user_memory = self._get_user_memory_block(session, topic) if (is_astrology and not missing_fields) else ""
 
             try:
@@ -522,6 +509,8 @@ class ChatService:
 
                         response_text = llm_service.generate(prompt=retry_prompt, temperature=0.75)
 
+                        # Re-validate once after the fix attempt, log-only —
+                        # don't loop indefinitely if the model still misses it.
                         remaining = validate_claims(response_text, dasha_timeline_str, evidence_vote)
                         if remaining:
                             logger.warning(f"Claim validation still found {len(remaining)} issue(s) after regeneration")
@@ -654,7 +643,8 @@ class ChatService:
                 kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence,
                 event_timing=event_timing_str
             )
-
+            
+            
             user_memory = ""
             repeat_hint = ""
             if is_astrology and not missing_fields:
