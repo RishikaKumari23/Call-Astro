@@ -1,21 +1,4 @@
-"""
-Marriage Tendency Classifier — determines whether a chart leans toward
-early, normal, or late marriage, used to rank/prioritize candidate Dasha
-windows rather than treating them all equally.
 
-⚠️ PLACEHOLDER RULES — NOT YET CONFIRMED BY PROFESSOR ⚠️
-The classification logic below is a reasonable placeholder based on common
-general principles (7th lord strength/house, Venus placement, Mars/Saturn
-influence on the 7th), NOT the professor's exact confirmed rule set. Do not
-present ranked windows as authoritative until his real rules are substituted
-here. This file exists so the RANKING STAGE has somewhere to plug in real
-rules later without restructuring the pipeline — the classification
-function itself is the only thing that needs to change once confirmed.
-
-Ask him specifically:
-"What exact chart factors should I use to classify a chart as early,
-normal, or late marriage?"
-"""
 from typing import List, Dict, Optional
 from app.services.kundli_service import get_house_lord
 from app.services.topic_service import get_house_for_sign
