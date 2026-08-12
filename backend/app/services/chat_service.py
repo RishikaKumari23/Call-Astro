@@ -104,8 +104,12 @@ class ChatService:
             logger.error(f"Kundli fetch failed: {kundli_err}")
 
         return "No chart data available."
-
+    
     def _get_rag_context(self, message_text: str, topic: Optional[str] = None):
+        """Retrieves top-K chunks, logs their relevance scores (so retrieval
+        quality is actually visible/debuggable), and DROPS chunks below
+        settings.MIN_RAG_RELEVANCE instead of silently feeding weak matches
+        to the LLM as if they were solid ground truth."""
         try:
             search_query = message_text
             if topic:
@@ -118,18 +122,41 @@ class ChatService:
                 query=search_query, query_vector=query_vector,
                 top_k=settings.TOP_K_RETRIEVAL, alpha=settings.HYBRID_ALPHA
             )
+
+            logger.info(f"[RAG] query='{search_query}' topic={topic} raw_hits={len(hits)}")
+            for i, hit in enumerate(hits):
+                logger.info(
+                    f"[RAG]   #{i+1} score={hit['score']:.3f} "
+                    f"(semantic={hit['semantic_score']:.3f}, lexical={hit['lexical_score']:.3f}) "
+                    f"source={hit['metadata'].get('source', 'Unknown')}"
+                )
+
+            relevant_hits = [h for h in hits if h["score"] >= settings.MIN_RAG_RELEVANCE]
+            dropped = len(hits) - len(relevant_hits)
+            if dropped > 0:
+                logger.info(
+                    f"[RAG] dropped {dropped}/{len(hits)} chunk(s) below "
+                    f"relevance threshold {settings.MIN_RAG_RELEVANCE}"
+                )
+
+            if not relevant_hits:
+                logger.info("[RAG] no sufficiently relevant chunks — proceeding with no book context")
+                return "No reference available.", []
+
             context_chunks = []
             sources = []
-            for i, hit in enumerate(hits):
-                source = hit['metadata'].get('source', 'Unknown')
+            for i, hit in enumerate(relevant_hits):
+                source = hit["metadata"].get("source", "Unknown")
                 sources.append(source)
-                context_chunks.append(f"--- Context {i+1} [Source: {source}] ---\n{hit['text']}\n")
-            logger.info(f"Retrieved {len(hits)} chunks for query")
+                context_chunks.append(
+                    f"--- Context {i+1} [Source: {source}, relevance: {hit['score']:.2f}] ---\n{hit['text']}\n"
+                )
+
             return "\n".join(context_chunks), sources
         except Exception as rag_err:
             logger.error(f"RAG failed: {rag_err}")
             return "No reference available.", []
-
+    
     # ------------------------------------------------------------------
     # Per-topic cache — bundles emphasis/divisional/consistency/missing-
     # evidence/timeline/evidence_vote into ONE JSON blob keyed by topic,
