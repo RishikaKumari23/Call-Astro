@@ -26,9 +26,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ messages, isTyping, lang
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
+  const hasUserOrAssistantMessage = messages.some(msg => msg.role !== 'system');
+
   return (
     <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
-      {messages.length === 0 && (
+      {!hasUserOrAssistantMessage && (
         <div className="flex justify-start max-w-2xl mx-auto">
           <div className="flex gap-4">
             <div className="w-9 h-9 rounded-full bg-amber-500 flex items-center justify-center text-white text-base shadow-sm shrink-0">🔮</div>
