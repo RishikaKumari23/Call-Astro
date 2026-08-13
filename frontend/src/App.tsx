@@ -195,7 +195,7 @@ function App() {
       }
     } catch (err: any) {
       console.error('Failed to send message:', err);
-      setError(err.message || 'Something went wrong. Is Ollama running?');
+      setError(err.message || 'Something went wrong. Please try again.');
     } finally {
       setIsTyping(false);
     }

@@ -26,8 +26,8 @@ class Settings(BaseSettings):
     OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
 
     # Embedding Settings (ollama | local)
-    # If "local", it will fall back to using sentence-transformers on CPU
-    EMBEDDING_PROVIDER: str = "ollama"
+    # "local" uses sentence-transformers (all-MiniLM-L6-v2) — required in production (Railway has no Ollama)
+    EMBEDDING_PROVIDER: str = "local"
     LOCAL_EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
     # Database
@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 150
     TOP_K_RETRIEVAL: int = 4
+    MIN_RAG_RELEVANCE: float = 0.3  # Minimum hybrid score to include a chunk in context (0.0–1.0)
     HYBRID_ALPHA: float = 0.5 # Balance weight between lexical (BM25) and vector cosine search
 
     # Dasha Lambda (separate, bearer-token-authenticated API providing
