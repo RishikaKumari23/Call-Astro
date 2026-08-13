@@ -34,16 +34,16 @@ class DocumentIndexer:
 
     def extract_pdf_text(self, file_path: str) -> str:
         try:
-            import pypdf
+            import fitz
         except ImportError:
-            logger.error("pypdf package is not installed. PDF extraction will be skipped.")
-            raise RuntimeError("pypdf package is required for indexing PDF documents. Please run 'pip install pypdf'.")
+            logger.error("PyMuPDF (fitz) package is not installed. PDF extraction will be skipped.")
+            raise RuntimeError("PyMuPDF package is required for indexing PDF documents. Please run 'pip install PyMuPDF'.")
 
         try:
-            reader = pypdf.PdfReader(file_path)
+            doc = fitz.open(file_path)
             text = []
-            for i, page in enumerate(reader.pages):
-                page_text = page.extract_text()
+            for page in doc:
+                page_text = page.get_text()
                 if page_text:
                     text.append(page_text)
             return "\n".join(text)
