@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { next } from "@vercel/edge";
 
 // ---------------------------------------------------------------------------
 // Basic Authentication — Vercel Edge Middleware
@@ -14,16 +14,16 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const config = {
   // Run on every route — excludes static assets so images/fonts still load
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|assets/|.*\\..*).*)"],
 };
 
-export default function middleware(req: NextRequest) {
+export default function middleware(req: Request) {
   const user = process.env.BASIC_AUTH_USER;
   const pass = process.env.BASIC_AUTH_PASSWORD;
 
   // If env vars aren't set, allow access (prevents locking yourself out during dev)
   if (!user || !pass) {
-    return NextResponse.next();
+    return next();
   }
 
   const authHeader = req.headers.get("authorization");
@@ -35,13 +35,13 @@ export default function middleware(req: NextRequest) {
       const decoded = atob(encoded);
       const [reqUser, reqPass] = decoded.split(":");
       if (reqUser === user && reqPass === pass) {
-        return NextResponse.next();
+        return next();
       }
     }
   }
 
   // No valid credentials — trigger the browser's native login dialog
-  return new NextResponse("Authentication required", {
+  return new Response("Authentication required", {
     status: 401,
     headers: {
       "WWW-Authenticate": 'Basic realm="Call-Astro — Restricted Access"',
