@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { API_BASE } from '../api';
 
 interface WeeklyGuidanceProps {
   sessionId: string;
@@ -10,7 +11,7 @@ export default function WeeklyGuidance({ sessionId, language }: WeeklyGuidancePr
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/api/session/${sessionId}/weekly-guidance`)
+    fetch(`${API_BASE}/session/${sessionId}/weekly-guidance`)
       .then((res) => res.json())
       .then((data) => {
         if (data.available) setGuidance(data.guidance);

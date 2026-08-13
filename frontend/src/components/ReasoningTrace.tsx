@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { API_BASE } from '../api';
 import { Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface TraceStep {
@@ -43,7 +44,7 @@ export default function ReasoningTrace({ sessionId, refreshKey, language }: Reas
   useEffect(() => {
     if (!sessionId) return;
     setLoading(true);
-    fetch(`/api/session/${sessionId}/reasoning-trace`)
+    fetch(`${API_BASE}/session/${sessionId}/reasoning-trace`)
       .then((res) => res.json())
       .then((data) => setSteps(data.available ? data.steps : []))
       .catch(() => setSteps([]))

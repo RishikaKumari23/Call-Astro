@@ -15,7 +15,7 @@ import ReasoningTrace from './components/ReasoningTrace';
 interface Message { role: 'user' | 'assistant' | 'system'; content: string; timestamp?: string; }
 interface IngestStatus { indexing_completed: boolean; total_chunks: number; loading: boolean; }
 
-const API_BASE = '/api';
+import { API_BASE } from './api';
 
 const GREETINGS: Record<string, (name: string) => string> = {
   English: (name) => `Hey ${name}!`,

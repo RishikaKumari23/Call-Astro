@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { API_BASE } from '../api';
 
 interface LifeDashboardProps {
   sessionId: string;
@@ -43,7 +44,7 @@ export default function LifeDashboard({ sessionId, language }: LifeDashboardProp
   const t = STRINGS[language] || STRINGS.Hinglish;
 
   useEffect(() => {
-    fetch(`/api/session/${sessionId}/dashboard`)
+    fetch(`${API_BASE}/session/${sessionId}/dashboard`)
       .then((res) => res.json())
       .then((data) => {
         if (data.available) {
