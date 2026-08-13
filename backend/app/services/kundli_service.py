@@ -206,6 +206,11 @@ class KundliService:
             positions = kundli_data.get("planetary_positions", [])
 
             ZODIAC = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
+            NAKSHATRAS = [
+                "Ashwini", "Bharani", "Krittika", "Rohini", "Mrigashira", "Ardra", "Punarvasu", "Pushya", "Ashlesha",
+                "Magha", "Purva Phalguni", "Uttara Phalguni", "Hasta", "Chitra", "Swati", "Vishakha", "Anuradha", "Jyeshtha",
+                "Mula", "Purva Ashadha", "Uttara Ashadha", "Shravana", "Dhanishta", "Shatabhisha", "Purva Bhadrapada", "Uttara Bhadrapada", "Revati"
+            ]
             
             ascendant_sign = None
             moon_sign = None
@@ -239,7 +244,17 @@ class KundliService:
                 lord_data = planet_lords.get(name, {})
                 star_lord = lord_data.get("star_lord")
                 pada = lord_data.get("pada")
-                nak_str = f" [Nakshatra Lord: {star_lord}, Pada: {pada}]" if star_lord else ""
+                degree = lord_data.get("degree")
+                
+                nak_name_str = ""
+                if degree is not None:
+                    try:
+                        nak_idx = int(float(degree) / (360.0 / 27.0)) % 27
+                        nak_name_str = f"{NAKSHATRAS[nak_idx]} Nakshatra, "
+                    except Exception:
+                        pass
+                
+                nak_str = f" [{nak_name_str}Nakshatra Lord: {star_lord}, Pada: {pada}]" if star_lord else ""
 
                 retro_marker = " (retrograde)" if is_retro else ""
                 planet_lines.append(f"{name} in {sign}{house_str}{nak_str}{retro_marker}")
