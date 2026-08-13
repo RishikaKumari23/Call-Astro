@@ -557,8 +557,12 @@ class ChatService:
     # ------------------------------------------------------------------
     def process_chat_message_stream(self, session_id: str, message_text: str):
         logger.info(f"Processing chat message (stream) for session: {session_id}")
+        # Initialize language from session BEFORE try block so the except fallback
+        # always uses the correct user language instead of hardcoded Hinglish
+        _session_pre = db.get_or_create_session(session_id)
+        language = _session_pre.get("language", "English")
         try:
-            session = db.get_or_create_session(session_id)
+            session = _session_pre
             history = db.get_history(session_id, limit=10)
             history_text = self._format_history_for_llm(history)
 
@@ -714,10 +718,15 @@ class ChatService:
 
         except Exception as e:
             logger.error(f"Chat streaming error: {e}")
-            fallback = "Kripya dobara koshish karein."
+            if language == "English":
+                fallback = "I'm sorry, please try again."
+            elif language == "Hindi":
+                fallback = "कृपया दोबारा कोशिश करें।"
+            else:
+                fallback = "Kripya dobara koshish karein."
             yield {"type": "chunk", "text": fallback}
             yield {"type": "done", "session_id": session_id, "message": fallback,
-                   "dob": None, "birth_time": None, "birth_place": None, "language": "Hinglish"}
+                   "dob": None, "birth_time": None, "birth_place": None, "language": language}
 
     def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits_sources: Optional[List[str]] = None) -> list:
         if not topic:

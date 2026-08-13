@@ -225,22 +225,25 @@ def get_instant_suggestions(session: dict, topic: str, language: str = "English"
     import random
     from app.services.kundli_service import get_house_lord
 
-    kundli_data = session.get("kundli_data", {})
-    if isinstance(kundli_data, str):
-        try:
-            kundli_data = json.loads(kundli_data)
-        except:
-            kundli_data = {}
-            
-    ascendant = session.get("ascendant", "Unknown")
-    
-    dasha_data = session.get("dasha_data", {})
+    # Read ascendant from kundli_raw (the chart JSON stored by chat_service)
+    ascendant = "Unknown"
+    kundli_raw = session.get("kundli_raw")
+    if kundli_raw:
+        if isinstance(kundli_raw, str):
+            try:
+                kundli_raw = json.loads(kundli_raw)
+            except:
+                kundli_raw = {}
+        ascendant = kundli_raw.get("ascendant_sign", "Unknown")
+
+    # Read dasha from kundli_dasha (the dasha JSON stored by chat_service)
+    dasha_data = session.get("kundli_dasha", {})
     if isinstance(dasha_data, str):
         try:
             dasha_data = json.loads(dasha_data)
         except:
             dasha_data = {}
-            
+
     mahadasha = dasha_data.get("mahadasha", {}).get("planet", "Current")
     
     # Calculate house lords
