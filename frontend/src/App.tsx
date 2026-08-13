@@ -109,12 +109,29 @@ function App() {
       if (res.ok) {
         const data = await res.json();
         setIngestStatus({ indexing_completed: data.indexing_completed, total_chunks: data.total_chunks, loading: false });
+        return data.indexing_completed;
       }
     } catch (err) {
       console.error('Error checking ingest status:', err);
       setIngestStatus(prev => ({ ...prev, loading: false }));
     }
+    return false;
   };
+
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    if (!ingestStatus.indexing_completed) {
+      interval = setInterval(async () => {
+        const completed = await checkIngestStatus();
+        if (completed) {
+          clearInterval(interval);
+        }
+      }, 5000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [ingestStatus.indexing_completed]);
 
   const handleSendMessage = async (text: string) => {
     const userMsg: Message = { role: 'user', content: text, timestamp: new Date().toISOString() };
