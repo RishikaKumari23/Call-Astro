@@ -120,7 +120,7 @@ TOPIC_SUGGESTIONS = {
     "marriage": [
         "Which gemstone should I wear to attract the right partner?",
         "When is the best time for my marriage according to my Dasha?",
-        "How is my 7th house lord placed in my chart?",
+        "How is {marriage_lord} (my 7th house lord) placed in my chart?",
         "Is Venus strong in my chart for a happy marriage?",
         "What does my Navamsa (D9) chart say about my spouse?",
         "Which planets in my chart are delaying my marriage?",
@@ -131,13 +131,13 @@ TOPIC_SUGGESTIONS = {
         "Is Rahu or Ketu affecting my marriage timing?",
         "What does my current Antardasha say about my marriage timing?",
         "Which mantra or puja is best for early marriage?",
-        "Will my marriage be in my current Mahadasha?",
+        "Will my marriage be in my current {mahadasha} Mahadasha?",
         "How does Saturn's position affect my marriage prospects?",
     ],
     "career": [
         "Which gemstone strengthens my career planet?",
         "When will my career growth peak in the next 2 years?",
-        "Is my 10th house strong for a government job?",
+        "Is my 10th house (ruled by {career_lord}) strong for a government job?",
         "What does my D10 (Dasamsa) chart say about my career?",
         "Which planet is the biggest support for my profession?",
         "Will I get a promotion in my current Dasha?",
@@ -146,7 +146,7 @@ TOPIC_SUGGESTIONS = {
         "Which field of work best suits my birth chart?",
         "Are there any planets causing delays in my career?",
         "Should I change my job in my current Dasha period?",
-        "What remedy can strengthen my 10th house lord?",
+        "What remedy can strengthen {career_lord} (my 10th house lord)?",
         "Will I get opportunities to work abroad?",
         "How strong is Mercury in my chart for business?",
         "What does my current Antardasha mean for my professional life?",
@@ -154,7 +154,7 @@ TOPIC_SUGGESTIONS = {
     "finance": [
         "Which stone or remedy can improve my financial luck?",
         "When will my income increase according to my Dasha?",
-        "How is my 11th house placed for gains?",
+        "How is my 11th house (ruled by {wealth_lord}) placed for gains?",
         "Is Jupiter well-placed for wealth in my chart?",
         "What does my 2nd house say about accumulated wealth?",
         "Will I face any major financial loss in the coming year?",
@@ -164,7 +164,7 @@ TOPIC_SUGGESTIONS = {
         "What remedy should I do to improve my savings?",
         "Will I receive any unexpected windfall or inheritance?",
         "How does Rahu in my chart affect my income?",
-        "Is my current Mahadasha good for financial stability?",
+        "Is my current {mahadasha} Mahadasha good for financial stability?",
         "What business or investment suits my chart the most?",
         "Which house lord controls my overall wealth?",
     ],
@@ -178,7 +178,7 @@ TOPIC_SUGGESTIONS = {
         "Which mantra or puja strengthens my immune system?",
         "Is there any period coming up where I need to be extra careful?",
         "How does Rahu or Ketu placement affect my wellbeing?",
-        "Which house lord controls my overall health?",
+        "How does {health_lord} control my overall health?",
         "Is Mars weak in my chart? How does it affect my energy?",
         "What diet or lifestyle changes does my chart suggest?",
         "How does my current Antardasha lord influence my health?",
@@ -218,11 +218,48 @@ DEFAULT_SUGGESTIONS = [
 ]
 
 
-def get_instant_suggestions(topic, language: str = "English") -> list:
+def get_instant_suggestions(session: dict, topic: str, language: str = "English") -> list:
     """Returns 3 random, non-repeating instant follow-up suggestions based on
     the detected topic. Picks from a large pool so they feel fresh every time.
     No LLM call needed — responses are immediate."""
     import random
+    from app.services.kundli_service import get_house_lord
+
+    kundli_data = session.get("kundli_data", {})
+    if isinstance(kundli_data, str):
+        try:
+            kundli_data = json.loads(kundli_data)
+        except:
+            kundli_data = {}
+            
+    ascendant = session.get("ascendant", "Unknown")
+    
+    dasha_data = session.get("dasha_data", {})
+    if isinstance(dasha_data, str):
+        try:
+            dasha_data = json.loads(dasha_data)
+        except:
+            dasha_data = {}
+            
+    mahadasha = dasha_data.get("mahadasha", {}).get("planet", "Current")
+    
+    # Calculate house lords
+    career_lord = get_house_lord(10, ascendant) or "10th house lord"
+    marriage_lord = get_house_lord(7, ascendant) or "7th house lord"
+    wealth_lord = get_house_lord(11, ascendant) or "11th house lord"
+    health_lord = get_house_lord(6, ascendant) or "6th house lord"
+    education_lord = get_house_lord(5, ascendant) or "5th house lord"
+
+    def format_suggestion(s: str) -> str:
+        return s.format(
+            ascendant=ascendant,
+            mahadasha=mahadasha,
+            career_lord=career_lord,
+            marriage_lord=marriage_lord,
+            wealth_lord=wealth_lord,
+            health_lord=health_lord,
+            education_lord=education_lord
+        )
 
     if language == "Hinglish":
         hinglish_map = {
@@ -238,15 +275,15 @@ def get_instant_suggestions(topic, language: str = "English") -> list:
                 "Mera current Antardasha shaadi timing ke liye kaisa hai?",
                 "Kya Rahu ya Ketu meri shaadi ko affect kar rahe hain?",
                 "Konsa mantra ya puja jaldi shaadi ke liye best hai?",
-                "Kya is Mahadasha mein shaadi hogi?",
+                "Kya is {mahadasha} Mahadasha mein shaadi hogi?",
                 "Future spouse ki qualities kya hongi mere chart ke anusar?",
-                "Mera 7th house lord kahan placed hai?",
+                "{marriage_lord} (mera 7th house lord) kahan placed hai?",
                 "Saturn meri shaadi ki timing ko kaise affect karta hai?",
             ],
             "career": [
                 "Career ke liye kaunsa gemstone sahi rahega?",
                 "Agli 2 saalon mein career growth kab hogi?",
-                "Sarkari naukri ke liye mera 10th house kaisa hai?",
+                "Sarkari naukri ke liye mera 10th house ({career_lord}) kaisa hai?",
                 "D10 chart mera career ke baare mein kya kehta hai?",
                 "Konsa planet mera career support karta hai?",
                 "Kya is Dasha mein promotion milegi?",
@@ -254,7 +291,7 @@ def get_instant_suggestions(topic, language: str = "English") -> list:
                 "Konsi field mujhe suit karti hai chart ke hisaab se?",
                 "Kya career mein delays hain, kaunse planets ki wajah se?",
                 "Job change karna sahi rahega current Dasha mein?",
-                "10th house lord ko strong karne ka kaunsa upay karoon?",
+                "{career_lord} (10th house lord) ko strong karne ka kaunsa upay karoon?",
                 "Videsh mein kaam karne ke chances hain mera chart mein?",
                 "Business ke liye Mercury kaisa hai mera chart mein?",
                 "6th house mera work life ko kaise affect karta hai?",
@@ -263,7 +300,7 @@ def get_instant_suggestions(topic, language: str = "English") -> list:
             "finance": [
                 "Paisa badhane ke liye kaunsa stone ya upay karoon?",
                 "Mere Dasha mein income kab badhegi?",
-                "Mera 11th house gains ke liye kaisa hai?",
+                "Mera 11th house ({wealth_lord}) gains ke liye kaisa hai?",
                 "Jupiter mera wealth ke liye well-placed hai?",
                 "2nd house wealth ke baare mein kya kehta hai?",
                 "Kya aane wale saal mein koi bada financial loss hoga?",
@@ -272,7 +309,7 @@ def get_instant_suggestions(topic, language: str = "English") -> list:
                 "Savings badhane ke liye kaunsa upay sahi hai?",
                 "Kya koi unexpected income ya inheritance milegi?",
                 "Rahu income pe kaisa asar dalta hai mere chart mein?",
-                "Current Mahadasha financial stability ke liye kaisi hai?",
+                "Current {mahadasha} Mahadasha financial stability ke liye kaisi hai?",
                 "Konsa business ya investment mujhe suit karta hai?",
                 "Debt kam karne ka koi astrological upay hai?",
                 "Mera overall wealth kaunsa house lord control karta hai?",
@@ -324,7 +361,7 @@ def get_instant_suggestions(topic, language: str = "English") -> list:
             "Mera Nakshatra mere life path ke baare mein kya kehta hai?",
             "Mere chart ki sabse badi strength kya hai?",
         ])
-        return random.sample(pool, min(6, len(pool)))
+        return [format_suggestion(s) for s in random.sample(pool, min(6, len(pool)))]
 
     if language == "Hindi":
         hindi_map = {
@@ -426,11 +463,11 @@ def get_instant_suggestions(topic, language: str = "English") -> list:
             "चंद्र राशि मेरी भावनाओं को कैसे प्रभावित करती है?",
             "मेरा नक्षत्र जीवन पथ के बारे में क्या कहता है?",
         ])
-        return random.sample(pool, min(6, len(pool)))
+        return [format_suggestion(s) for s in random.sample(pool, min(6, len(pool)))]
 
     # English (default)
     pool = TOPIC_SUGGESTIONS.get(topic, DEFAULT_SUGGESTIONS)
-    return random.sample(pool, min(6, len(pool)))
+    return [format_suggestion(s) for s in random.sample(pool, min(6, len(pool)))]
 
 
 

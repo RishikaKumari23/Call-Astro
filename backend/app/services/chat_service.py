@@ -710,7 +710,7 @@ class ChatService:
                     logger.error(f"Reasoning trace caching failed: {trace_err}")
                 self._update_topic_memory(session_id, session, topic, full_text)
 
-            suggestions = get_instant_suggestions(topic, language)
+            suggestions = get_instant_suggestions(session, topic, language)
 
             yield {"type": "done", "session_id": session_id, "message": full_text,
                    "dob": session.get("dob"), "birth_time": session.get("birth_time"),
