@@ -104,8 +104,12 @@ class ChatService:
             logger.error(f"Kundli fetch failed: {kundli_err}")
 
         return "No chart data available."
-
+    
     def _get_rag_context(self, message_text: str, topic: Optional[str] = None):
+        """Retrieves top-K chunks, logs their relevance scores (so retrieval
+        quality is actually visible/debuggable), and DROPS chunks below
+        settings.MIN_RAG_RELEVANCE instead of silently feeding weak matches
+        to the LLM as if they were solid ground truth."""
         try:
             search_query = message_text
             if topic:
@@ -118,22 +122,45 @@ class ChatService:
                 query=search_query, query_vector=query_vector,
                 top_k=settings.TOP_K_RETRIEVAL, alpha=settings.HYBRID_ALPHA
             )
+
+            logger.info(f"[RAG] query='{search_query}' topic={topic} raw_hits={len(hits)}")
+            for i, hit in enumerate(hits):
+                logger.info(
+                    f"[RAG]   #{i+1} score={hit['score']:.3f} "
+                    f"(semantic={hit['semantic_score']:.3f}, lexical={hit['lexical_score']:.3f}) "
+                    f"source={hit['metadata'].get('source', 'Unknown')}"
+                )
+
+            relevant_hits = [h for h in hits if h["score"] >= settings.MIN_RAG_RELEVANCE]
+            dropped = len(hits) - len(relevant_hits)
+            if dropped > 0:
+                logger.info(
+                    f"[RAG] dropped {dropped}/{len(hits)} chunk(s) below "
+                    f"relevance threshold {settings.MIN_RAG_RELEVANCE}"
+                )
+
+            if not relevant_hits:
+                logger.info("[RAG] no sufficiently relevant chunks — proceeding with no book context")
+                return "No reference available.", []
+
             context_chunks = []
             sources = []
-            for i, hit in enumerate(hits):
-                source = hit['metadata'].get('source', 'Unknown')
+            for i, hit in enumerate(relevant_hits):
+                source = hit["metadata"].get("source", "Unknown")
                 sources.append(source)
-                context_chunks.append(f"--- Context {i+1} [Source: {source}] ---\n{hit['text']}\n")
-            logger.info(f"Retrieved {len(hits)} chunks for query")
+                context_chunks.append(
+                    f"--- Context {i+1} [Source: {source}, relevance: {hit['score']:.2f}] ---\n{hit['text']}\n"
+                )
+
             return "\n".join(context_chunks), sources
         except Exception as rag_err:
             logger.error(f"RAG failed: {rag_err}")
             return "No reference available.", []
-
+    
     # ------------------------------------------------------------------
     # Per-topic cache — bundles emphasis/divisional/consistency/missing-
-    # evidence/timeline/evidence_vote/event_timing into ONE JSON blob keyed
-    # by topic, so asking the SAME topic again in a session reuses everything.
+    # evidence/timeline/evidence_vote into ONE JSON blob keyed by topic,
+    # so asking the SAME topic again in a session reuses everything instantly.
     # ------------------------------------------------------------------
     def _get_topic_cache(self, session: Dict, topic: str) -> Optional[Dict]:
         raw = session.get("topic_cache")
@@ -158,12 +185,9 @@ class ChatService:
 
     def _get_topic_bundle(self, session_id: str, session: Dict, topic: Optional[str], language: str) -> Dict[str, Any]:
         """Returns {emphasis, divisional, consistency, missing_evidence,
-        timeline, evidence_vote, event_timing} for this topic — from cache
-        if already computed this session, otherwise computes once and caches."""
-        empty = {
-            "emphasis": "", "divisional": "", "consistency": "", "missing_evidence": "",
-            "timeline": "", "evidence_vote": None, "event_timing": ""
-        }
+        timeline, evidence_vote} for this topic — from cache if already
+        computed this session, otherwise computes once and caches."""
+        empty = {"emphasis": "", "divisional": "", "consistency": "", "missing_evidence": "", "timeline": "", "evidence_vote": None}
         if not topic:
             return empty
 
@@ -172,16 +196,12 @@ class ChatService:
             logger.info(f"Using cached topic bundle for '{topic}'")
             if "evidence_vote" not in cached:
                 cached["evidence_vote"] = None
-            if "event_timing" not in cached:
-                cached["event_timing"] = ""
             return cached
 
         bundle = dict(empty)
         try:
             cached_raw = session.get("kundli_raw")
             cached_dasha = session.get("kundli_dasha")
-            planets = []
-            ascendant_sign = None
             if cached_raw:
                 parsed = json.loads(cached_raw)
                 planets = parsed.get("planets", [])
@@ -219,28 +239,6 @@ class ChatService:
                 )
 
             bundle["timeline"] = self._get_dasha_timeline(session_id, session, topic, language)
-            logger.info(f"[EventTiming DEBUG] topic={topic}")
-            logger.info(f"[EventTiming DEBUG] TOPIC_RULES match={topic in TOPIC_RULES}")
-            logger.info(f"[EventTiming DEBUG] cached_raw exists={bool(cached_raw)}")
-            logger.info(f"[EventTiming DEBUG] dasha_tree_raw exists={bool(session.get('dasha_tree_raw'))}")
-            # Hierarchical event-timing search — only for topics with a
-            # defined candidate hierarchy in TOPIC_RULES (currently marriage,
-            # career-as-placeholder). Reuses the SAME dasha_tree_raw cache
-            # that _get_dasha_timeline just populated above — no extra fetch.
-            if topic in TOPIC_RULES and cached_raw:
-                logger.info("[EventTiming DEBUG] ENTERING EVENT TIMING BLOCK")
-                try:
-                    cached_tree_raw = session.get("dasha_tree_raw")
-                    if cached_tree_raw:
-                        dasha_tree = json.loads(cached_tree_raw)
-                        flattened = dasha_api_service.flatten_periods(dasha_tree, level="antardasha")
-                        logger.info(f"[EventTiming DEBUG] Flattened Dasha periods: {len(flattened)}")
-                        if planets and ascendant_sign:
-                            timing_result = find_candidate_windows(topic, planets, ascendant_sign, flattened)
-                            bundle["event_timing"] = format_event_timing_for_prompt(timing_result, topic, language)
-                except Exception as timing_err:
-                    logger.error(f"Event timing search failed: {timing_err}")
-
         except Exception as e:
             logger.error(f"Topic bundle build failed for '{topic}': {e}")
 
@@ -297,8 +295,8 @@ class ChatService:
         return session.get("yoga_text") or ""
 
     def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str,
-                                   yoga_text: str, missing_evidence: str = "", event_timing: str = "") -> str:
-        parts = [p for p in [kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence, event_timing] if p]
+                                   yoga_text: str, missing_evidence: str = "") -> str:
+        parts = [p for p in [kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence] if p]
         return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
@@ -467,7 +465,7 @@ class ChatService:
 
             yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields) else ""
 
-            topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = event_timing_str = ""
+            topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = ""
             evidence_vote = None
             if is_astrology and not missing_fields and topic:
                 bundle = self._get_topic_bundle(session_id, session, topic, language)
@@ -477,12 +475,8 @@ class ChatService:
                 missing_evidence = bundle["missing_evidence"]
                 dasha_timeline_str = bundle["timeline"]
                 evidence_vote = bundle.get("evidence_vote")
-                event_timing_str = bundle.get("event_timing", "")
 
-            final_kundli_data = self._build_final_kundli_data(
-                kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence,
-                event_timing=event_timing_str
-            )
+            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
             user_memory = self._get_user_memory_block(session, topic) if (is_astrology and not missing_fields) else ""
 
             try:
@@ -521,6 +515,8 @@ class ChatService:
 
                         response_text = llm_service.generate(prompt=retry_prompt, temperature=0.75)
 
+                        # Re-validate once after the fix attempt, log-only —
+                        # don't loop indefinitely if the model still misses it.
                         remaining = validate_claims(response_text, dasha_timeline_str, evidence_vote)
                         if remaining:
                             logger.warning(f"Claim validation still found {len(remaining)} issue(s) after regeneration")
@@ -637,7 +633,7 @@ class ChatService:
 
             yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields) else ""
 
-            topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = event_timing_str = ""
+            topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = ""
             evidence_vote = None
             if is_astrology and not missing_fields and topic:
                 bundle = self._get_topic_bundle(session_id, session, topic, language)
@@ -647,12 +643,8 @@ class ChatService:
                 missing_evidence = bundle["missing_evidence"]
                 dasha_timeline_str = bundle["timeline"]
                 evidence_vote = bundle.get("evidence_vote")
-                event_timing_str = bundle.get("event_timing", "")
 
-            final_kundli_data = self._build_final_kundli_data(
-                kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence,
-                event_timing=event_timing_str
-            )
+            final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
 
             user_memory = ""
             repeat_hint = ""
