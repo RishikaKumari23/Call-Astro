@@ -21,7 +21,6 @@ from app.services.topic_service import (
 )
 from app.services.dasha_api_service import dasha_api_service
 from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
-from app.services.event_timing_service import find_candidate_windows, format_event_timing_for_prompt, TOPIC_RULES
 
 
 class ChatService:
