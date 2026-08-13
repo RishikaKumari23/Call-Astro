@@ -480,11 +480,13 @@ class ChatService:
             user_memory = self._get_user_memory_block(session, topic) if (is_astrology and not missing_fields) else ""
 
             try:
+                current_date = datetime.now().strftime("%d %B %Y")
                 astrologer_prompt = ASTROLOGER_PROMPT.format(
                     name=session.get("name") or "Friend",
                     language=language, dob=session.get("dob") or "Not provided",
                     birth_time=session.get("birth_time") or "Not provided",
                     birth_place=session.get("birth_place") or "Not provided",
+                    current_date=current_date,
                     context=context_str or "No book context.", kundli_data=final_kundli_data,
                     user_memory=user_memory or "No prior topics discussed yet.",
                     consistency_note=consistency_note or "No specific conflict detected.",
@@ -652,11 +654,13 @@ class ChatService:
                 user_memory = self._get_user_memory_block(session, topic)
                 repeat_hint = self._get_repeat_topic_hint(session, topic)
 
+            current_date = datetime.now().strftime("%d %B %Y")
             astrologer_prompt = ASTROLOGER_PROMPT.format(
                 name=session.get("name") or "Friend",
                 language=language, dob=session.get("dob") or "Not provided",
                 birth_time=session.get("birth_time") or "Not provided",
                 birth_place=session.get("birth_place") or "Not provided",
+                current_date=current_date,
                 context=context_str or "No book context.", kundli_data=final_kundli_data,
                 user_memory=user_memory or "No prior topics discussed yet.",
                 consistency_note=consistency_note or "No specific conflict detected.",

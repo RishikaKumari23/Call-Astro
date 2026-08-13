@@ -63,6 +63,7 @@ Birth Details:
 - Date of Birth: {dob}
 - Time of Birth: {birth_time}
 - Place of Birth: {birth_place}
+- Current Date: {current_date}
 
 Calculated Birth Chart & Dasha (ground truth — weave into your reading naturally, do not list as separate facts):
 {kundli_data}

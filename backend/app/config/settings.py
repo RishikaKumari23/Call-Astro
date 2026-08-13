@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # Groq Settings (used when LLM_PROVIDER=groq)
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.1-8b-instant"
+    GROQ_MODEL: str = "llama-3.1-70b-versatile"
 
     # Ollama Settings (used when LLM_PROVIDER=ollama, for local development)
     OLLAMA_HOST: str = "http://localhost:11434"
