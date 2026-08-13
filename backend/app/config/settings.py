@@ -13,10 +13,17 @@ class Settings(BaseSettings):
     PORT: int = 8000
     HOST: str = "0.0.0.0"
 
-    # Ollama Settings
+    # LLM Provider — "groq" (cloud, always-on) or "ollama" (local)
+    LLM_PROVIDER: str = "groq"
+
+    # Groq Settings (used when LLM_PROVIDER=groq)
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "llama3-8b-8192"
+
+    # Ollama Settings (used when LLM_PROVIDER=ollama, for local development)
     OLLAMA_HOST: str = "http://localhost:11434"
-    OLLAMA_LLM_MODEL: str = "llama3"         # Default to Llama3 or user config
-    OLLAMA_EMBED_MODEL: str = "nomic-embed-text" # Default embedding model in Ollama
+    OLLAMA_LLM_MODEL: str = "llama3"
+    OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
 
     # Embedding Settings (ollama | local)
     # If "local", it will fall back to using sentence-transformers on CPU

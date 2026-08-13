@@ -15,11 +15,46 @@ except ImportError:
 
 class LLMService:
     def __init__(self):
-        self.host = settings.OLLAMA_HOST
-        self.model = settings.OLLAMA_LLM_MODEL
-        logger.info(f"LLM Service initialised targeting Ollama host: {self.host}, model: {self.model}")
+        self.provider = settings.LLM_PROVIDER.lower()
+
+        if self.provider == "groq":
+            from groq import Groq
+            self.groq_client = Groq(api_key=settings.GROQ_API_KEY)
+            self.model = settings.GROQ_MODEL
+            logger.info(f"LLM Service initialised with Groq (model: {self.model})")
+        else:
+            self.host = settings.OLLAMA_HOST
+            self.model = settings.OLLAMA_LLM_MODEL
+            logger.info(f"LLM Service initialised with Ollama (host: {self.host}, model: {self.model})")
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None, json_format: bool = False, temperature: float = 0.3) -> str:
+        if self.provider == "groq":
+            return self._generate_groq(prompt, system_prompt, json_format, temperature)
+        return self._generate_ollama(prompt, system_prompt, json_format, temperature)
+
+    def _generate_groq(self, prompt: str, system_prompt: Optional[str], json_format: bool, temperature: float) -> str:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": 2048,
+        }
+        if json_format:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        try:
+            response = self.groq_client.chat.completions.create(**kwargs)
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"Groq generation failed: {e}")
+            raise
+
+    def _generate_ollama(self, prompt: str, system_prompt: Optional[str], json_format: bool, temperature: float) -> str:
         url = f"{self.host}/api/generate"
         payload = {
             "model": self.model, "prompt": prompt, "stream": False,
@@ -37,7 +72,7 @@ class LLMService:
                 return result.get("response", "").strip()
             elif response.status_code == 404:
                 logger.error(f"Ollama returned 404: Model '{self.model}' not found.")
-                raise RuntimeError(f"Ollama model '{self.model}' is not pulled or running. Run: ollama pull {self.model}")
+                raise RuntimeError(f"Ollama model '{self.model}' is not pulled. Run: ollama pull {self.model}")
             else:
                 logger.error(f"Ollama returned status code {response.status_code}: {response.text}")
                 raise RuntimeError(f"Ollama server error ({response.status_code}): {response.text}")
@@ -49,7 +84,32 @@ class LLMService:
             raise
 
     def generate_stream(self, prompt: str, temperature: float = 0.6):
-        """Stream tokens from Ollama as they're generated."""
+        """Stream tokens from the configured LLM provider."""
+        if self.provider == "groq":
+            yield from self._stream_groq(prompt, temperature)
+        else:
+            yield from self._stream_ollama(prompt, temperature)
+
+    def _stream_groq(self, prompt: str, temperature: float):
+        """Stream tokens from Groq."""
+        try:
+            stream = self.groq_client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=2048,
+                stream=True,
+            )
+            for chunk in stream:
+                token = chunk.choices[0].delta.content
+                if token:
+                    yield token
+        except Exception as e:
+            logger.error(f"Groq streaming failed: {e}")
+            raise
+
+    def _stream_ollama(self, prompt: str, temperature: float):
+        """Stream tokens from Ollama."""
         url = f"{self.host}/api/generate"
         payload = {
             "model": self.model, "prompt": prompt, "stream": True,
@@ -79,6 +139,7 @@ class LLMService:
         except Exception as e:
             logger.error(f"Error during Ollama stream: {e}")
             raise
+
 
     def _extract_date_regex(self, text: str) -> Optional[str]:
         if DATEUTIL_AVAILABLE:
