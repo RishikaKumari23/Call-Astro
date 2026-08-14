@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 150
     TOP_K_RETRIEVAL: int = 4
     HYBRID_ALPHA: float = 0.5 # Balance weight between lexical (BM25) and vector cosine search
-
+    MIN_RAG_RELEVANCE:float =0.35
     # Dasha Lambda (separate, bearer-token-authenticated API providing
     # real calculated Mahadasha/Antardasha/Pratyantardasha with actual dates)
     DASHA_LAMBDA_URL: str = "https://bivrov2febq5ued37psv2hcxyi0wlxet.lambda-url.ap-south-1.on.aws/"
