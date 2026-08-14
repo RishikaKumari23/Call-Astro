@@ -307,18 +307,31 @@ class ChatService:
 
         return "\n".join(lines)
 
+    def _build_personalized_rag_query(self, message_text: str, topic: Optional[str], targeted_facts: str) -> str:
+        """Build a second-stage RAG query using the user's chart factors selected by the first RAG pass."""
+        parts = [message_text.strip()]
+        if topic:
+            parts.append(topic)
+        if targeted_facts:
+            parts.append(targeted_facts)
+        parts.append("classical astrology interpretation timing principles")
+        return " ".join(p for p in parts if p).strip()
+
     def _get_rag_first_context(self, message_text: str, topic: Optional[str], session: Dict):
-        """RAG-first context: retrieve classical framework, then target cached chart facts."""
+        """Two-stage RAG: discover the classical framework first, then retrieve personalized evidence using the user's chart."""
         try:
             from app.services.topic_service import TOPIC_RELEVANT_BOOKS
 
-            framework_query = self._build_framework_query(message_text, topic)
             preferred_sources = TOPIC_RELEVANT_BOOKS.get(topic) if topic else None
 
+            # ==========================================================
+            # STAGE 1 — GENERIC CLASSICAL FRAMEWORK RETRIEVAL
+            # ==========================================================
+            framework_query = self._build_framework_query(message_text, topic)
             query_vector_topic = self.embeddings_provider.get_embedding(framework_query)
             query_vector_global = self.embeddings_provider.get_embedding(message_text)
 
-            hits = vector_store.dual_retrieve(
+            framework_hits = vector_store.dual_retrieve(
                 topic_query=framework_query,
                 global_query=message_text,
                 query_vector_topic=query_vector_topic,
@@ -329,25 +342,29 @@ class ChatService:
                 alpha=settings.HYBRID_ALPHA,
             )
 
-            relevant_hits = [h for h in hits if h["score"] >= settings.MIN_RAG_RELEVANCE]
-            if not relevant_hits:
+            framework_hits = [
+                h for h in framework_hits
+                if h["score"] >= settings.MIN_RAG_RELEVANCE
+            ]
+
+            if not framework_hits:
                 logger.info("[RAGFirst] no sufficiently relevant framework chunks")
                 return "No reference available.", [], ""
 
-            context_chunks = []
-            rag_hits = []
-            for i, hit in enumerate(relevant_hits):
-                source = hit["metadata"].get("source", "Unknown")
-                page = hit["metadata"].get("page")
-                page_label = f", Page: {page}" if page is not None else ""
-                context_chunks.append(
-                    f"--- Classical Principle {i+1} [Source: {source}{page_label}, relevance: {hit['score']:.2f}] ---\n{hit['text']}\n"
-                )
-                rag_hits.append({
-                    "source": source, "page": page, "score": hit["score"], "text": hit["text"]
+            framework_rag_hits = []
+            for hit in framework_hits:
+                metadata = hit.get("metadata", {})
+                framework_rag_hits.append({
+                    "source": metadata.get("source", "Unknown"),
+                    "page": metadata.get("page"),
+                    "score": hit["score"],
+                    "text": hit.get("text", ""),
                 })
 
-            referenced = self._extract_referenced_factors(rag_hits)
+            # ==========================================================
+            # EXTRACT WHAT THE CLASSICAL SOURCES SAY TO EXAMINE
+            # ==========================================================
+            referenced = self._extract_referenced_factors(framework_rag_hits)
             targeted_facts = self._build_targeted_kundli_facts(referenced, session)
 
             logger.info(
@@ -356,9 +373,92 @@ class ChatService:
                 f"concepts={referenced['concepts']}"
             )
 
-            return "\n".join(context_chunks), rag_hits, targeted_facts
+            # ==========================================================
+            # STAGE 2 — PERSONALIZED RAG
+            # ==========================================================
+            personalized_query = self._build_personalized_rag_query(
+                message_text, topic, targeted_facts
+            )
+
+            logger.info(
+                f"[RAGPersonalized] query='{personalized_query}'"
+            )
+
+            personalized_vector = self.embeddings_provider.get_embedding(
+                personalized_query
+            )
+
+            personalized_hits = vector_store.dual_retrieve(
+                topic_query=personalized_query,
+                global_query=message_text,
+                query_vector_topic=personalized_vector,
+                query_vector_global=query_vector_global,
+                preferred_sources=preferred_sources,
+                top_k_each=8,
+                final_top_k=settings.TOP_K_RETRIEVAL,
+                alpha=settings.HYBRID_ALPHA,
+            )
+
+            personalized_hits = [
+                h for h in personalized_hits
+                if h["score"] >= settings.MIN_RAG_RELEVANCE
+            ]
+
+            # ==========================================================
+            # COMBINE FRAMEWORK + PERSONALIZED EVIDENCE
+            # ==========================================================
+            combined_hits = []
+            seen = set()
+
+            for hit in framework_hits + personalized_hits:
+                metadata = hit.get("metadata", {})
+                source = metadata.get("source", "Unknown")
+                page = metadata.get("page")
+                text = hit.get("text", "")
+                key = (source, page, text[:100])
+
+                if key in seen:
+                    continue
+
+                seen.add(key)
+                combined_hits.append({
+                    "source": source,
+                    "page": page,
+                    "score": hit["score"],
+                    "text": text,
+                })
+
+            combined_hits.sort(
+                key=lambda x: x.get("score", 0),
+                reverse=True
+            )
+            combined_hits = combined_hits[:settings.TOP_K_RETRIEVAL]
+
+            # ==========================================================
+            # BUILD LLM CONTEXT
+            # ==========================================================
+            context_chunks = []
+            for i, hit in enumerate(combined_hits):
+                page_label = f", Page: {hit['page']}" if hit["page"] is not None else ""
+                context_chunks.append(
+                    f"--- Classical Evidence {i + 1} "
+                    f"[Source: {hit['source']}{page_label}, "
+                    f"relevance: {hit['score']:.2f}] ---\n"
+                    f"{hit['text']}\n"
+                )
+
+            context_str = "\n".join(context_chunks)
+
+            logger.info(
+                f"[RAGPersonalized] framework_hits={len(framework_hits)} "
+                f"personalized_hits={len(personalized_hits)} "
+                f"combined={len(combined_hits)}"
+            )
+
+            return context_str, combined_hits, targeted_facts
+
         except Exception as e:
-            logger.error(f"RAG-first context build failed: {e}")
+            logger.error(f"Two-stage RAG context build failed: {e}")
             return "No reference available.", [], ""
 
     # ------------------------------------------------------------------
@@ -581,6 +681,211 @@ class ChatService:
         except Exception as e:
             logger.error(f"Failed to update topic memory: {e}")
 
+    def _get_previous_assistant_answer(self, history: List[Dict[str, str]]) -> str:
+        """Return the most recent assistant answer from the conversation history."""
+        for msg in reversed(history or []):
+            if msg.get("role") == "assistant" and msg.get("content"):
+                return str(msg.get("content")).strip()
+        return ""
+
+    def _is_evidence_followup(self, message_text: str, history: List[Dict[str, str]]) -> bool:
+        """Detect short follow-ups that ask for justification of the previous answer."""
+        previous = self._get_previous_assistant_answer(history)
+        if not previous or not message_text:
+            return False
+
+        text = re.sub(r"[^a-z0-9\s]", " ", message_text.lower()).strip()
+        text = re.sub(r"\s+", " ", text)
+
+        exact_phrases = {
+            "why",
+            "why?",
+            "why is that",
+            "why is this",
+            "why so",
+            "how",
+            "how so",
+            "how come",
+            "explain",
+            "explain why",
+            "what is the reason",
+            "what makes you say that",
+            "why do you say that",
+            "what supports this",
+            "what supports that",
+            "what is the basis",
+            "basis",
+            "proof",
+            "evidence",
+        }
+        if text in exact_phrases:
+            return True
+
+        followup_patterns = (
+            r"^why\b",
+            r"^how\b",
+            r"^what supports\b",
+            r"^what makes you say\b",
+            r"^what is the basis\b",
+            r"^can you explain\b",
+            r"^explain (that|this|it)\b",
+        )
+        return any(re.search(pattern, text) for pattern in followup_patterns)
+
+    def _extract_claims_from_previous_answer(self, previous_answer: str, language: str) -> List[str]:
+        """Extract a small set of concrete, retrievable claims from the previous answer."""
+        if not previous_answer:
+            return []
+
+        prompt = f"""
+You are preparing a retrieval query for a Vedic astrology evidence system.
+Extract the concrete astrological claims made in the previous astrologer answer below.
+Return ONLY a JSON array of 3 to 6 short claim strings.
+Do not add new astrology facts. Do not evaluate whether the claims are correct.
+Keep dates, planets, houses, dashas, transits, yogas, and timing periods when they appear.
+Language: {language}
+
+Previous astrologer answer:
+{previous_answer}
+""".strip()
+
+        try:
+            raw = llm_service.generate(prompt=prompt, temperature=0.1)
+            raw = (raw or "").strip()
+            match = re.search(r"\[[\s\S]*\]", raw)
+            if match:
+                parsed = json.loads(match.group(0))
+                if isinstance(parsed, list):
+                    claims = [str(x).strip() for x in parsed if str(x).strip()]
+                    return claims[:6]
+        except Exception as e:
+            logger.warning(f"Previous-answer claim extraction failed: {e}")
+
+        # Safe fallback: use the previous answer itself as a retrieval query.
+        sentences = re.split(r"(?<=[.!?])\s+", previous_answer)
+        return [s.strip() for s in sentences if s.strip()][:5]
+
+    def _get_followup_evidence_context(
+        self,
+        message_text: str,
+        previous_answer: str,
+        topic: Optional[str],
+        session: Dict,
+        language: str,
+    ):
+        """Conversational RAG path: previous answer -> claims -> supporting evidence."""
+        try:
+            from app.services.topic_service import TOPIC_RELEVANT_BOOKS
+
+            claims = self._extract_claims_from_previous_answer(previous_answer, language)
+            claim_text = "\n".join(f"- {claim}" for claim in claims)
+
+            # Include the already computed personalized chart facts when available.
+            targeted_facts = ""
+            try:
+                cached_raw = session.get("kundli_raw")
+                if cached_raw:
+                    parsed = json.loads(cached_raw)
+                    ascendant_sign = parsed.get("ascendant_sign")
+                    planets = parsed.get("planets", []) or []
+                    dasha_info = json.loads(session.get("kundli_dasha")) if session.get("kundli_dasha") else None
+                    from app.services.topic_service import get_house_for_sign
+
+                    # For follow-up evidence, surface a compact chart snapshot rather than
+                    # inventing new factors. This is supplementary to the claims themselves.
+                    compact_lines = []
+                    if ascendant_sign:
+                        compact_lines.append(f"Ascendant: {ascendant_sign}")
+                    for p in planets:
+                        name = p.get("name")
+                        sign = p.get("sign_name")
+                        if name and sign:
+                            house = get_house_for_sign(sign, ascendant_sign) if ascendant_sign else None
+                            house_part = f", house {house}" if house else ""
+                            compact_lines.append(f"{name}: {sign}{house_part}")
+                    if dasha_info:
+                        maha = dasha_info.get("current_mahadasha", {}) or {}
+                        antar = dasha_info.get("current_antardasha", {}) or {}
+                        if maha.get("lord"):
+                            dasha_line = f"Current Dasha: Mahadasha={maha.get('lord')}"
+                            if antar.get("lord"):
+                                dasha_line += f", Antardasha={antar.get('lord')}"
+                            compact_lines.append(dasha_line)
+                    targeted_facts = "\n".join(compact_lines)
+            except Exception as chart_err:
+                logger.warning(f"Follow-up chart context build failed: {chart_err}")
+
+            retrieval_query_parts = [
+                f"User follow-up: {message_text}",
+                "Previous astrologer answer:",
+                previous_answer,
+                "Claims to support:",
+                claim_text,
+                "classical Vedic astrology evidence supporting these exact claims",
+            ]
+            if topic:
+                retrieval_query_parts.append(f"topic: {topic}")
+            if targeted_facts:
+                retrieval_query_parts.append("Relevant chart context:\n" + targeted_facts)
+
+            retrieval_query = "\n".join(p for p in retrieval_query_parts if p).strip()
+            logger.info(f"[RAGFollowup] query='{retrieval_query}'")
+
+            query_vector = self.embeddings_provider.get_embedding(retrieval_query)
+            global_vector = self.embeddings_provider.get_embedding(previous_answer or message_text)
+            preferred_sources = TOPIC_RELEVANT_BOOKS.get(topic) if topic else None
+
+            hits = vector_store.dual_retrieve(
+                topic_query=retrieval_query,
+                global_query=previous_answer or message_text,
+                query_vector_topic=query_vector,
+                query_vector_global=global_vector,
+                preferred_sources=preferred_sources,
+                top_k_each=8,
+                final_top_k=settings.TOP_K_RETRIEVAL,
+                alpha=settings.HYBRID_ALPHA,
+            )
+
+            relevant_hits = [h for h in hits if h["score"] >= settings.MIN_RAG_RELEVANCE]
+            context_chunks = []
+            rag_hits = []
+            for i, hit in enumerate(relevant_hits):
+                metadata = hit.get("metadata", {})
+                source = metadata.get("source", "Unknown")
+                page = metadata.get("page")
+                score = hit.get("score", 0)
+                page_label = f", Page: {page}" if page is not None else ""
+                text = hit.get("text", "")
+                context_chunks.append(
+                    f"--- Supporting Classical Evidence {i + 1} "
+                    f"[Source: {source}{page_label}, relevance: {score:.2f}] ---\n{text}\n"
+                )
+                rag_hits.append({
+                    "source": source,
+                    "page": page,
+                    "score": score,
+                    "text": text,
+                })
+
+            logger.info(
+                f"[RAGFollowup] claims={len(claims)} evidence_hits={len(rag_hits)}"
+            )
+
+            followup_context = (
+                "CONVERSATIONAL RAG — SUPPORTING EVIDENCE FOR THE PREVIOUS ANSWER\n\n"
+                "Previous astrologer answer:\n"
+                f"{previous_answer}\n\n"
+                "Extracted claims to justify:\n"
+                f"{claim_text or '- Use the previous answer as the claim source.'}\n\n"
+                "Retrieved supporting classical evidence:\n"
+                f"{''.join(context_chunks) if context_chunks else 'No sufficiently relevant supporting classical evidence was retrieved.'}"
+            )
+            return followup_context, rag_hits, claims, targeted_facts
+
+        except Exception as e:
+            logger.error(f"Follow-up evidence RAG failed: {e}")
+            return "No supporting evidence available.", [], [], ""
+
     def _safe_generate_followups(self, response_text: str, language: str) -> List[str]:
         try:
             return llm_service.generate_followups(response_text, language) or []
@@ -606,6 +911,8 @@ class ChatService:
             session = db.get_or_create_session(session_id)
             history = db.get_history(session_id, limit=10)
             history_text = self._format_history_for_llm(history)
+            previous_answer = self._get_previous_assistant_answer(history)
+            evidence_followup = self._is_evidence_followup(message_text, history)
 
             profile_complete = bool(session.get("dob") and session.get("birth_time") and session.get("birth_place"))
 
@@ -685,11 +992,27 @@ class ChatService:
             context_str = ""
             rag_hits: List[Dict[str, Any]] = []
             targeted_facts = ""
+            followup_claims: List[str] = []
 
-            # For interpretation/timing questions, RAG determines which classical
-            # factors should be surfaced from the user's already-cached chart.
-            # Chart-fact questions continue to use the direct fast path.
-            if is_astrology and not missing_fields and route in ("timing", "analysis"):
+            # Conversational RAG: if the user asks "Why?" / "How?" after an
+            # astrologer answer, retrieve evidence for that previous answer
+            # instead of starting a new generic search from the short follow-up.
+            if (
+                evidence_followup
+                and previous_answer
+                and is_astrology
+                and not missing_fields
+                and route in ("timing", "analysis")
+            ):
+                (
+                    context_str,
+                    rag_hits,
+                    followup_claims,
+                    targeted_facts,
+                ) = self._get_followup_evidence_context(
+                    message_text, previous_answer, topic, session, language
+                )
+            elif is_astrology and not missing_fields and route in ("timing", "analysis"):
                 context_str, rag_hits, targeted_facts = self._get_rag_first_context(message_text, topic, session)
             elif is_astrology and not missing_fields and route != "chart_fact":
                 context_str, rag_hits = self._get_rag_context(message_text, topic)
@@ -725,7 +1048,23 @@ class ChatService:
                     response_contract=response_contract,
                     history=history_text, query=message_text
                 )
-                response_text = llm_service.generate(prompt=astrologer_prompt, temperature=0.6)
+                if evidence_followup and previous_answer and followup_claims:
+                    astrologer_prompt += (
+                        "\n\nCONVERSATIONAL FOLLOW-UP MODE — IMPORTANT:\n"
+                        "The user's current question is a follow-up asking for the reasoning behind your previous answer. "
+                        "Do NOT give a new independent prediction. Explain why the previous answer was made. "
+                        "Use the retrieved supporting classical evidence below and connect it explicitly to the claims. "
+                        "If the retrieved evidence does not support a claim, say that the evidence is insufficient rather than inventing support. "
+                        "Keep the explanation conversational and direct.\n\n"
+                        f"Previous answer:\n{previous_answer}\n\n"
+                        "Claims extracted from the previous answer:\n"
+                        + "\n".join(f"- {c}" for c in followup_claims)
+                        + "\n\nRetrieved evidence is the primary basis for the explanation."
+                    )
+                response_text = llm_service.generate(
+                    prompt=astrologer_prompt,
+                    temperature=0.45 if evidence_followup else 0.6
+                )
 
                 if is_astrology and not missing_fields:
                     recent_texts = self._get_recent_assistant_texts(session_id)
@@ -758,7 +1097,7 @@ class ChatService:
 
             if is_astrology and not missing_fields:
                 try:
-                    trace = self._build_reasoning_trace(session, topic, rag_hits, targeted_facts)
+                    trace = self._build_reasoning_trace(session, topic, rag_hits, targeted_facts, followup_claims)
                     db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
                 except Exception as trace_err:
                     logger.error(f"Reasoning trace caching failed: {trace_err}")
@@ -789,6 +1128,8 @@ class ChatService:
             session = db.get_or_create_session(session_id)
             history = db.get_history(session_id, limit=10)
             history_text = self._format_history_for_llm(history)
+            previous_answer = self._get_previous_assistant_answer(history)
+            evidence_followup = self._is_evidence_followup(message_text, history)
 
             profile_complete = bool(session.get("dob") and session.get("birth_time") and session.get("birth_place"))
 
@@ -872,8 +1213,24 @@ class ChatService:
             context_str = ""
             rag_hits: List[Dict[str, Any]] = []
             targeted_facts = ""
+            followup_claims: List[str] = []
 
-            if is_astrology and not missing_fields and route in ("timing", "analysis"):
+            if (
+                evidence_followup
+                and previous_answer
+                and is_astrology
+                and not missing_fields
+                and route in ("timing", "analysis")
+            ):
+                (
+                    context_str,
+                    rag_hits,
+                    followup_claims,
+                    targeted_facts,
+                ) = self._get_followup_evidence_context(
+                    message_text, previous_answer, topic, session, language
+                )
+            elif is_astrology and not missing_fields and route in ("timing", "analysis"):
                 context_str, rag_hits, targeted_facts = self._get_rag_first_context(message_text, topic, session)
             elif is_astrology and not missing_fields and route != "chart_fact":
                 context_str, rag_hits = self._get_rag_context(message_text, topic)
@@ -916,7 +1273,19 @@ class ChatService:
             if repeat_hint:
                 astrologer_prompt += f"\n\n{repeat_hint}"
 
-            gen_temperature = 0.75 if repeat_hint else 0.6
+            if evidence_followup and previous_answer and followup_claims:
+                astrologer_prompt += (
+                    "\n\nCONVERSATIONAL FOLLOW-UP MODE — IMPORTANT:\n"
+                    "The user's current question asks why/how the previous answer was reached. "
+                    "Do NOT make a fresh prediction. Explain the previous answer using the retrieved supporting classical evidence. "
+                    "Connect each important claim to the evidence. If evidence is insufficient, say so instead of inventing support. "
+                    "Be concise and conversational.\n\n"
+                    f"Previous answer:\n{previous_answer}\n\n"
+                    "Claims extracted from the previous answer:\n"
+                    + "\n".join(f"- {c}" for c in followup_claims)
+                )
+
+            gen_temperature = 0.45 if evidence_followup else (0.75 if repeat_hint else 0.6)
 
             full_text = ""
             try:
@@ -940,7 +1309,7 @@ class ChatService:
 
             if is_astrology and not missing_fields:
                 try:
-                    trace = self._build_reasoning_trace(session, topic, rag_hits, targeted_facts)
+                    trace = self._build_reasoning_trace(session, topic, rag_hits, targeted_facts, followup_claims)
                     db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
                 except Exception as trace_err:
                     logger.error(f"Reasoning trace caching failed: {trace_err}")
@@ -960,7 +1329,7 @@ class ChatService:
             yield {"type": "done", "session_id": session_id, "message": fallback,
                    "dob": None, "birth_time": None, "birth_place": None, "language": "Hinglish"}
 
-    def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits: Optional[List[Dict[str, Any]]] = None, targeted_facts: str = "") -> list:
+    def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits: Optional[List[Dict[str, Any]]] = None, targeted_facts: str = "", followup_claims: Optional[List[str]] = None) -> list:
         """Build an auditable RAG-first reasoning trace."""
         try:
             rag_hits = rag_hits or []
@@ -998,12 +1367,29 @@ class ChatService:
 
             steps.append({"step": 1, "title": "Classical Framework Retrieved", "detail": framework_detail, "type": "rag"})
 
+            if followup_claims:
+                personalized_detail = (
+                    "Conversational RAG detected a follow-up to the previous answer. "
+                    "The previous answer was reduced to claims and the retrieval step searched "
+                    "for classical evidence supporting those claims.\n\n"
+                    "Claims retrieved for support:\n"
+                    + "\n".join(f"• {claim}" for claim in followup_claims)
+                )
+                personalized_type = "rag_followup"
+            else:
+                personalized_detail = (
+                    "A second RAG pass used the relevant chart configuration to retrieve "
+                    "more personalized classical evidence for this question."
+                )
+                personalized_type = "rag_personalized"
+            steps.append({"step": 2, "title": "Personalized Evidence Retrieved", "detail": personalized_detail, "type": personalized_type})
+
             if targeted_facts:
                 chart_detail = "The user's Kundli was examined for the factors identified by the retrieved classical sources.\n\n" + targeted_facts
             else:
                 chart_detail = "No targeted chart facts were identified from the retrieved classical framework."
 
-            steps.append({"step": 2, "title": "Relevant Chart Factors", "detail": chart_detail, "type": "chart"})
+            steps.append({"step": 3, "title": "Relevant Chart Factors", "detail": chart_detail, "type": "chart"})
 
             dasha_detail = ""
             try:
@@ -1024,7 +1410,7 @@ class ChatService:
             if not dasha_detail:
                 dasha_detail = "Current Dasha information is available through the chart and timing analysis."
 
-            steps.append({"step": 3, "title": "Dasha & Timing", "detail": dasha_detail, "type": "dasha"})
+            steps.append({"step": 4, "title": "Dasha & Timing", "detail": dasha_detail, "type": "dasha"})
 
             reference_lines = []
             seen_references = set()
@@ -1045,7 +1431,7 @@ class ChatService:
                 reference_lines.append(f"• {reference}")
 
             evidence_detail = "\n".join(reference_lines) if reference_lines else "No classical references were available."
-            steps.append({"step": 4, "title": "Classical Evidence", "detail": evidence_detail, "type": "evidence"})
+            steps.append({"step": 5, "title": "Classical Evidence", "detail": evidence_detail, "type": "evidence"})
 
             synthesis_lines = []
             try:
@@ -1081,7 +1467,7 @@ class ChatService:
             if not synthesis_lines:
                 synthesis_lines.append("The final interpretation combines the retrieved classical evidence with the relevant Kundli and Dasha information.")
 
-            steps.append({"step": 5, "title": "Evidence Synthesis", "detail": "\n".join(synthesis_lines), "type": "synthesis"})
+            steps.append({"step": 6, "title": "Evidence Synthesis", "detail": "\n".join(synthesis_lines), "type": "synthesis"})
             logger.info(f"[RAGFirst] Reasoning trace built: {len(steps)} steps")
             return steps
         except Exception as e:
