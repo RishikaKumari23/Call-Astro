@@ -9,31 +9,7 @@ PLANET_NAME_MAP = {
 }
 
 RESPONSE_TEMPLATES = {
-    "ascendant": {
-        "English": "Your Ascendant (Lagna) is {sign}.",
-        "Hindi": "आपका लग्न {sign} है।",
-        "Hinglish": "Aapka Lagna {sign} hai.",
-    },
-    "moon_sign": {
-        "English": "Your Moon sign (Rashi) is {sign}.",
-        "Hindi": "आपकी चंद्र राशि {sign} है।",
-        "Hinglish": "Aapki Moon Rashi {sign} hai.",
-    },
-    "sun_sign": {
-        "English": "Your Sun sign is {sign}.",
-        "Hindi": "आपकी सूर्य राशि {sign} है।",
-        "Hinglish": "Aapki Sun Rashi {sign} hai.",
-    },
-    "planet_position": {
-        "English": "{planet} is in {sign}{house_str}.",
-        "Hindi": "{planet} {sign} में है{house_str}।",
-        "Hinglish": "{planet} {sign} mein hai{house_str}.",
-    },
-    "current_dasha": {
-        "English": "You are currently in {maha} Mahadasha{antar_str}.",
-        "Hindi": "आप वर्तमान में {maha} महादशा में हैं{antar_str}।",
-        "Hinglish": "Aap abhi {maha} Mahadasha mein hain{antar_str}.",
-    },
+   
     "birth_details": {
         "English": "Your birth details: {dob}, {birth_time}, {birth_place}.",
         "Hindi": "आपका जन्म विवरण: {dob}, {birth_time}, {birth_place}।",
