@@ -1,7 +1,8 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from datetime import datetime
 from difflib import SequenceMatcher
 import json
+import re
 from app.memory.database import db
 from app.services.llm_service import llm_service
 from app.services.geocoding_service import geocoding_service
@@ -23,14 +24,6 @@ from app.services.topic_service import (
 from app.services.dasha_api_service import dasha_api_service
 from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
 
-
-# Bump this whenever build_consistency_check / build_consistency_note /
-# build_missing_evidence_note / build_evidence_vote (or any other logic
-# feeding the per-topic bundle) changes. A topic_cache entry written under
-# an older version is treated as a cache miss and silently recomputed — so
-# a code deploy invalidates live sessions' cached reasoning without
-# needing to touch their birth-detail fields (the only thing the old
-# invalidation logic was keyed on).
 TOPIC_BUNDLE_LOGIC_VERSION = 1
 
 
@@ -176,6 +169,197 @@ class ChatService:
         except Exception as rag_err:
             logger.error(f"RAG failed: {rag_err}")
             return "No reference available.", []
+
+    def _build_framework_query(self, message_text: str, topic: Optional[str] = None) -> str:
+        """Build a RAG query aimed at classical principles, not the user's chart.
+
+        The purpose of this first retrieval pass is to discover what classical
+        astrology says should be examined for the question. It intentionally does
+        not inject the user's planetary placements.
+        """
+        base = message_text.strip()
+        parts = [base, "classical astrology principles rules indications relevant factors"]
+        if topic:
+            bias = get_search_bias(topic)
+            if bias:
+                parts.append(bias)
+        return " ".join(p for p in parts if p).strip()
+
+    def _extract_referenced_factors(self, rag_hits: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
+        """Extract chart factors explicitly discussed by retrieved book passages.
+
+        This is deliberately a lightweight first version. It does not encode
+        astrological meanings; it only identifies the entities mentioned by the
+        retrieved evidence so the corresponding chart facts can be surfaced.
+        """
+        houses: Set[str] = set()
+        planets: Set[str] = set()
+        charts: Set[str] = set()
+        concepts: Set[str] = set()
+
+        planet_names = [
+            "Sun", "Moon", "Mars", "Mercury", "Jupiter", "Venus",
+            "Saturn", "Rahu", "Ketu", "Ascendant"
+        ]
+        house_pattern = re.compile(r"\b(1[0-2]|[1-9])(?:st|nd|rd|th)\s+house\b", re.IGNORECASE)
+        chart_pattern = re.compile(r"\bD(?:1|7|9|10|24)\b", re.IGNORECASE)
+
+        for hit in rag_hits:
+            text = hit.get("text", "") or ""
+            lower = text.lower()
+
+            for planet in planet_names:
+                if planet.lower() in lower:
+                    planets.add(planet)
+
+            for match in house_pattern.finditer(text):
+                houses.add(match.group(1))
+
+            for match in chart_pattern.finditer(text):
+                charts.add(match.group(0).upper())
+
+            # These are concepts, not hard-coded interpretations. They tell the
+            # targeted-context builder what additional timing/relationship data
+            # may be useful when the books explicitly mention them.
+            for phrase in (
+                "7th lord", "10th lord", "6th lord", "8th lord", "9th lord",
+                "11th lord", "2nd lord", "12th lord", "lagna lord",
+                "mahadasha", "antardasha", "dasha", "transit"
+            ):
+                if phrase in lower:
+                    concepts.add(phrase)
+
+        return {"houses": houses, "planets": planets, "charts": charts, "concepts": concepts}
+
+    def _build_targeted_kundli_facts(self, referenced: Dict[str, Set[str]], session: Dict) -> str:
+        """Build only the chart/Dasha facts needed by the retrieved framework.
+
+        Kundli/Dasha data is read from the existing session cache; this helper
+        does not make additional external API calls.
+        """
+        cached_raw = session.get("kundli_raw")
+        cached_dasha = session.get("kundli_dasha")
+        if not cached_raw:
+            return ""
+
+        try:
+            parsed = json.loads(cached_raw)
+            planets = parsed.get("planets", []) or []
+            ascendant_sign = parsed.get("ascendant_sign")
+            dasha_info = json.loads(cached_dasha) if cached_dasha else None
+        except Exception as e:
+            logger.error(f"Failed to parse cached chart data for RAG-first context: {e}")
+            return ""
+
+        from app.services.topic_service import get_house_for_sign
+        from app.services.kundli_service import get_house_lord
+
+        houses = referenced.get("houses", set())
+        planets_wanted = referenced.get("planets", set())
+        charts = referenced.get("charts", set())
+        concepts = referenced.get("concepts", set())
+        lines: List[str] = []
+
+        if ascendant_sign and ("Ascendant" in planets_wanted or houses or "lagna lord" in concepts):
+            lines.append(f"Ascendant: {ascendant_sign}")
+
+        if houses and ascendant_sign:
+            lines.append("Relevant house facts (selected from retrieved classical evidence):")
+            for house_str in sorted(houses, key=lambda x: int(x)):
+                house_num = int(house_str)
+                lord = get_house_lord(house_num, ascendant_sign)
+                occupants = [
+                    p.get("name") for p in planets
+                    if p.get("name") and get_house_for_sign(p.get("sign_name", ""), ascendant_sign) == house_num
+                ]
+                occupant_str = f", occupied by {', '.join(occupants)}" if occupants else ""
+                lord_str = f"ruled by {lord}" if lord else "lord undetermined"
+                lines.append(f"- House {house_num}: {lord_str}{occupant_str}")
+
+        if planets_wanted:
+            lines.append("Relevant planet facts (selected from retrieved classical evidence):")
+            for planet_name in sorted(planets_wanted):
+                if planet_name == "Ascendant":
+                    continue
+                match = next((p for p in planets if p.get("name") == planet_name), None)
+                if not match:
+                    continue
+                sign = match.get("sign_name", "")
+                house = get_house_for_sign(sign, ascendant_sign) if ascendant_sign else None
+                house_str = f", house {house}" if house else ""
+                retro = " (retrograde)" if str(match.get("isRetro", "")).lower() == "true" else ""
+                lines.append(f"- {planet_name}: {sign}{house_str}{retro}")
+
+        if dasha_info and ("dasha" in concepts or "mahadasha" in concepts or "antardasha" in concepts or not lines):
+            maha = dasha_info.get("current_mahadasha", {}) or {}
+            antar = dasha_info.get("current_antardasha", {}) or {}
+            if maha:
+                dasha_line = f"Current Dasha: Mahadasha={maha.get('lord')}"
+                if antar:
+                    dasha_line += f", Antardasha={antar.get('lord')}"
+                lines.append(dasha_line)
+
+        if charts:
+            # The full divisional chart remains available through the existing
+            # topic-bundle path. We only record which divisional chart the books
+            # explicitly referenced so the LLM knows why it may matter.
+            lines.append(f"Divisional charts referenced by classical evidence: {', '.join(sorted(charts))}")
+
+        return "\n".join(lines)
+
+    def _get_rag_first_context(self, message_text: str, topic: Optional[str], session: Dict):
+        """RAG-first context: retrieve classical framework, then target cached chart facts."""
+        try:
+            from app.services.topic_service import TOPIC_RELEVANT_BOOKS
+
+            framework_query = self._build_framework_query(message_text, topic)
+            preferred_sources = TOPIC_RELEVANT_BOOKS.get(topic) if topic else None
+
+            query_vector_topic = self.embeddings_provider.get_embedding(framework_query)
+            query_vector_global = self.embeddings_provider.get_embedding(message_text)
+
+            hits = vector_store.dual_retrieve(
+                topic_query=framework_query,
+                global_query=message_text,
+                query_vector_topic=query_vector_topic,
+                query_vector_global=query_vector_global,
+                preferred_sources=preferred_sources,
+                top_k_each=6,
+                final_top_k=settings.TOP_K_RETRIEVAL,
+                alpha=settings.HYBRID_ALPHA,
+            )
+
+            relevant_hits = [h for h in hits if h["score"] >= settings.MIN_RAG_RELEVANCE]
+            if not relevant_hits:
+                logger.info("[RAGFirst] no sufficiently relevant framework chunks")
+                return "No reference available.", [], ""
+
+            context_chunks = []
+            rag_hits = []
+            for i, hit in enumerate(relevant_hits):
+                source = hit["metadata"].get("source", "Unknown")
+                page = hit["metadata"].get("page")
+                page_label = f", Page: {page}" if page is not None else ""
+                context_chunks.append(
+                    f"--- Classical Principle {i+1} [Source: {source}{page_label}, relevance: {hit['score']:.2f}] ---\n{hit['text']}\n"
+                )
+                rag_hits.append({
+                    "source": source, "page": page, "score": hit["score"], "text": hit["text"]
+                })
+
+            referenced = self._extract_referenced_factors(rag_hits)
+            targeted_facts = self._build_targeted_kundli_facts(referenced, session)
+
+            logger.info(
+                f"[RAGFirst] framework factors houses={referenced['houses']} "
+                f"planets={referenced['planets']} charts={referenced['charts']} "
+                f"concepts={referenced['concepts']}"
+            )
+
+            return "\n".join(context_chunks), rag_hits, targeted_facts
+        except Exception as e:
+            logger.error(f"RAG-first context build failed: {e}")
+            return "No reference available.", [], ""
 
     # ------------------------------------------------------------------
     # Per-topic cache — see TOPIC_BUNDLE_LOGIC_VERSION above for the
@@ -492,15 +676,23 @@ class ChatService:
             response_contract = get_response_contract(intent)
             logger.info(f"Query routed as: '{route}' (topic={topic}, intent={intent})")
 
-            context_str = ""
-            rag_hits: List[Dict[str, Any]] = []
-            if is_astrology and not missing_fields and route != "chart_fact":
-                context_str, rag_hits = self._get_rag_context(message_text, topic)
-
+            # Fetch/cache the Kundli first so RAG can select targeted chart facts from it.
             kundli_str = "No chart data available."
             if is_astrology and not missing_fields and route in ("timing", "analysis"):
                 cached_kundli = session.get("kundli_data")
                 kundli_str = cached_kundli if cached_kundli else self._fetch_and_cache_kundli(session_id, session)
+
+            context_str = ""
+            rag_hits: List[Dict[str, Any]] = []
+            targeted_facts = ""
+
+            # For interpretation/timing questions, RAG determines which classical
+            # factors should be surfaced from the user's already-cached chart.
+            # Chart-fact questions continue to use the direct fast path.
+            if is_astrology and not missing_fields and route in ("timing", "analysis"):
+                context_str, rag_hits, targeted_facts = self._get_rag_first_context(message_text, topic, session)
+            elif is_astrology and not missing_fields and route != "chart_fact":
+                context_str, rag_hits = self._get_rag_context(message_text, topic)
 
             yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields and route in ("timing", "analysis")) else ""
 
@@ -516,6 +708,8 @@ class ChatService:
                 evidence_vote = bundle.get("evidence_vote")
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
+            if targeted_facts:
+                final_kundli_data = f"{final_kundli_data}\n\n{targeted_facts}" if final_kundli_data else targeted_facts
             user_memory = self._get_user_memory_block(session, topic) if (is_astrology and not missing_fields and route in ("timing", "analysis")) else ""
 
             try:
@@ -564,7 +758,7 @@ class ChatService:
 
             if is_astrology and not missing_fields:
                 try:
-                    trace = self._build_reasoning_trace(session, topic, rag_hits)
+                    trace = self._build_reasoning_trace(session, topic, rag_hits, targeted_facts)
                     db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
                 except Exception as trace_err:
                     logger.error(f"Reasoning trace caching failed: {trace_err}")
@@ -669,15 +863,20 @@ class ChatService:
             response_contract = get_response_contract(intent)
             logger.info(f"Query routed as: '{route}' (topic={topic}, intent={intent})")
 
-            context_str = ""
-            rag_hits: List[Dict[str, Any]] = []
-            if is_astrology and not missing_fields and route != "chart_fact":
-                context_str, rag_hits = self._get_rag_context(message_text, topic)
-
+            # Fetch/cache the Kundli first so RAG can select targeted chart facts from it.
             kundli_str = "No chart data available."
             if is_astrology and not missing_fields and route in ("timing", "analysis"):
                 cached_kundli = session.get("kundli_data")
                 kundli_str = cached_kundli if cached_kundli else self._fetch_and_cache_kundli(session_id, session)
+
+            context_str = ""
+            rag_hits: List[Dict[str, Any]] = []
+            targeted_facts = ""
+
+            if is_astrology and not missing_fields and route in ("timing", "analysis"):
+                context_str, rag_hits, targeted_facts = self._get_rag_first_context(message_text, topic, session)
+            elif is_astrology and not missing_fields and route != "chart_fact":
+                context_str, rag_hits = self._get_rag_context(message_text, topic)
 
             yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields and route in ("timing", "analysis")) else ""
 
@@ -693,6 +892,8 @@ class ChatService:
                 evidence_vote = bundle.get("evidence_vote")
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
+            if targeted_facts:
+                final_kundli_data = f"{final_kundli_data}\n\n{targeted_facts}" if final_kundli_data else targeted_facts
 
             user_memory = ""
             repeat_hint = ""
@@ -739,7 +940,7 @@ class ChatService:
 
             if is_astrology and not missing_fields:
                 try:
-                    trace = self._build_reasoning_trace(session, topic, rag_hits)
+                    trace = self._build_reasoning_trace(session, topic, rag_hits, targeted_facts)
                     db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
                 except Exception as trace_err:
                     logger.error(f"Reasoning trace caching failed: {trace_err}")
@@ -759,36 +960,132 @@ class ChatService:
             yield {"type": "done", "session_id": session_id, "message": fallback,
                    "dob": None, "birth_time": None, "birth_place": None, "language": "Hinglish"}
 
-    def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits: Optional[List[Dict[str, Any]]] = None) -> list:
-        """rag_hits is now a list of {"source", "page", "score", "text"}
-        dicts (see _get_rag_context) rather than plain source-name strings —
-        so topic_service.build_reasoning_trace can attach the real page
-        number to each citation instead of needing the LLM to supply one.
-
-        NOTE: topic_service.build_reasoning_trace's signature/body needs a
-        matching update on its end to actually read hit["page"] out of
-        this list — that file wasn't available to update here."""
-        if not topic:
-            return []
+    def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits: Optional[List[Dict[str, Any]]] = None, targeted_facts: str = "") -> list:
+        """Build an auditable RAG-first reasoning trace."""
         try:
-            cached_raw = session.get("kundli_raw")
-            cached_dasha = session.get("kundli_dasha")
-            if not cached_raw:
-                return []
-            parsed = json.loads(cached_raw)
-            planets = parsed.get("planets", [])
-            ascendant_sign = parsed.get("ascendant_sign")
-            dasha_info = json.loads(cached_dasha) if cached_dasha else None
+            rag_hits = rag_hits or []
+            referenced = self._extract_referenced_factors(rag_hits)
+            houses = sorted(referenced.get("houses", set()), key=lambda x: int(x))
+            planets = sorted(referenced.get("planets", set()))
+            charts = sorted(referenced.get("charts", set()))
+            concepts = sorted(referenced.get("concepts", set()))
+            steps = []
 
-            from app.services.topic_service import build_consistency_check, build_reasoning_trace
-            consistency_check = build_consistency_check(topic, planets, ascendant_sign, dasha_info)
+            framework_lines = []
+            if houses:
+                house_labels = []
+                for h in houses:
+                    suffix = "th"
+                    if h == "1":
+                        suffix = "st"
+                    elif h == "2":
+                        suffix = "nd"
+                    elif h == "3":
+                        suffix = "rd"
+                    house_labels.append(f"{h}{suffix}")
+                framework_lines.append(f"Houses: {', '.join(house_labels)}")
+            if planets:
+                framework_lines.append(f"Planets: {', '.join(planets)}")
+            if charts:
+                framework_lines.append(f"Divisional charts: {', '.join(charts)}")
+            if concepts:
+                framework_lines.append(f"Concepts: {', '.join(concepts)}")
 
-            topic_cache = self._get_topic_cache(session, topic)
-            evidence_vote = topic_cache.get("evidence_vote") if topic_cache else None
+            if framework_lines:
+                framework_detail = "RAG retrieved classical sources and identified the following factors as relevant:\n" + "\n".join(f"• {line}" for line in framework_lines)
+            else:
+                framework_detail = "RAG retrieved classical sources, but no specific chart factors were confidently identified."
 
-            return build_reasoning_trace(topic, ascendant_sign, planets, dasha_info, consistency_check, rag_hits, evidence_vote)
+            steps.append({"step": 1, "title": "Classical Framework Retrieved", "detail": framework_detail, "type": "rag"})
+
+            if targeted_facts:
+                chart_detail = "The user's Kundli was examined for the factors identified by the retrieved classical sources.\n\n" + targeted_facts
+            else:
+                chart_detail = "No targeted chart facts were identified from the retrieved classical framework."
+
+            steps.append({"step": 2, "title": "Relevant Chart Factors", "detail": chart_detail, "type": "chart"})
+
+            dasha_detail = ""
+            try:
+                cached_dasha = session.get("kundli_dasha")
+                if cached_dasha:
+                    dasha_info = json.loads(cached_dasha)
+                    maha = dasha_info.get("current_mahadasha", {}) or {}
+                    antar = dasha_info.get("current_antardasha", {}) or {}
+                    maha_lord = maha.get("lord") or maha.get("name") or maha.get("planet")
+                    antar_lord = antar.get("lord") or antar.get("name") or antar.get("planet")
+                    if maha_lord:
+                        dasha_detail = f"Mahadasha: {maha_lord}"
+                    if antar_lord:
+                        dasha_detail += f"\nAntardasha: {antar_lord}"
+            except Exception as dasha_err:
+                logger.warning(f"Could not build Dasha reasoning trace: {dasha_err}")
+
+            if not dasha_detail:
+                dasha_detail = "Current Dasha information is available through the chart and timing analysis."
+
+            steps.append({"step": 3, "title": "Dasha & Timing", "detail": dasha_detail, "type": "dasha"})
+
+            reference_lines = []
+            seen_references = set()
+            for hit in rag_hits:
+                source = hit.get("source", "Unknown source")
+                page = hit.get("page")
+                score = hit.get("score")
+                reference_key = (source, page)
+                if reference_key in seen_references:
+                    continue
+                seen_references.add(reference_key)
+                reference = f"{source} — Page {page}" if page is not None else source
+                if score is not None:
+                    try:
+                        reference += f" (relevance: {float(score):.2f})"
+                    except (TypeError, ValueError):
+                        pass
+                reference_lines.append(f"• {reference}")
+
+            evidence_detail = "\n".join(reference_lines) if reference_lines else "No classical references were available."
+            steps.append({"step": 4, "title": "Classical Evidence", "detail": evidence_detail, "type": "evidence"})
+
+            synthesis_lines = []
+            try:
+                if topic:
+                    topic_cache = self._get_topic_cache(session, topic)
+                    if topic_cache:
+                        evidence_vote = topic_cache.get("evidence_vote")
+                        consistency = topic_cache.get("consistency", "")
+                        if evidence_vote:
+                            if isinstance(evidence_vote, dict):
+                                dasha_vote = evidence_vote.get("dasha")
+                                chart_vote = evidence_vote.get("chart")
+                                yoga_vote = evidence_vote.get("yogas")
+                                overall = evidence_vote.get("overall")
+                                confidence = evidence_vote.get("confidence")
+                                if dasha_vote:
+                                    synthesis_lines.append(f"Dasha Timing: {dasha_vote}")
+                                if chart_vote:
+                                    synthesis_lines.append(f"Chart Placement: {chart_vote}")
+                                if yoga_vote:
+                                    synthesis_lines.append(f"Yogas: {yoga_vote}")
+                                if confidence is not None:
+                                    synthesis_lines.append(f"Overall confidence: {confidence}%")
+                                if overall:
+                                    synthesis_lines.append(f"Overall verdict: {overall}")
+                            else:
+                                synthesis_lines.append(str(evidence_vote))
+                        if consistency:
+                            synthesis_lines.append(f"\nSignal consistency:\n{consistency}")
+            except Exception as evidence_err:
+                logger.warning(f"Could not build evidence synthesis trace: {evidence_err}")
+
+            if not synthesis_lines:
+                synthesis_lines.append("The final interpretation combines the retrieved classical evidence with the relevant Kundli and Dasha information.")
+
+            steps.append({"step": 5, "title": "Evidence Synthesis", "detail": "\n".join(synthesis_lines), "type": "synthesis"})
+            logger.info(f"[RAGFirst] Reasoning trace built: {len(steps)} steps")
+            return steps
         except Exception as e:
-            logger.error(f"Reasoning trace build failed: {e}")
+            logger.error(f"RAG-first reasoning trace build failed: {e}")
             return []
 
     def _get_full_kundli_response(self, session_id: str, session: Dict) -> Optional[Dict]:
