@@ -1,7 +1,5 @@
-# ============================================================
-# topic_service.py (updated)
-# ============================================================
-from typing import Optional, List, Dict
+
+from typing import Optional, List, Dict, Any
 from app.services.kundli_service import get_house_lord
 
 # Simplified but reasonable chart-factor mapping per life topic.
@@ -578,7 +576,7 @@ def build_reasoning_trace(
     planets: List[dict],
     dasha_info: Optional[dict],
     consistency_check: Optional[dict],
-    rag_sources: Optional[List[str]] = None,
+    rag_sources: Optional[List[Dict[str, Any]]] = None,
     evidence_vote: Optional[Dict] = None,
 ) -> List[dict]:
     """Assemble a numbered, inspectable reasoning chain from data already
@@ -667,14 +665,41 @@ def build_reasoning_trace(
         )
         steps.append({"step": step_num, "title": "Evidence Vote", "detail": detail})
         step_num += 1
-
     if rag_sources:
-        unique_sources = list(dict.fromkeys(rag_sources))[:3]
+        references = []
+        seen = set()
+
+        for hit in rag_sources:
+          source = hit.get("source", "Unknown")
+          page = hit.get("page")
+          score = hit.get("score")
+          # Avoid showing the same book/page twice
+          key = (source, page)
+          if key in seen:
+            continue
+          seen.add(key)
+
+          if page is not None:
+            reference = f"{source} — Page {page}"
+          else:
+            reference = source
+
+          if score is not None:
+            reference += f" (relevance: {score:.2f})"
+
+          references.append(reference)
+
+          if len(references) >= 3:
+            break
+
+    if references:
         steps.append({
-            "step": step_num, "title": "Classical References Consulted",
-            "detail": ", ".join(unique_sources)
+            "step": step_num,
+            "title": "Classical References Consulted",
+            "detail": "; ".join(references)
         })
         step_num += 1
+    
 
     return steps
 

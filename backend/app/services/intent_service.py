@@ -1,8 +1,6 @@
 """
-Intent + time-horizon classifier — deterministic, keyword-based (no LLM call,
-consistent with your existing topic classifier's cost profile). Determines
-WHICH response contract to use, so a "what's my moon sign" question and a
-"when will I get married" question don't get forced through the same template.
+Intent + time-horizon classifier — deterministic, keyword-based (no LLM call).
+Also includes chart-fact detection and the top-level query router.
 """
 import re
 from typing import Optional, Dict
@@ -44,8 +42,7 @@ STYLE_PATTERNS = {
 
 
 def classify_intent(message: str) -> str:
-    """Returns one of: timing, simple_fact, explanation, strength_check,
-    remedy, or 'general' as fallback (most predictions default here)."""
+    # Returns timing, simple_fact, explanation, strength_check, remedy, or general
     text = message.lower()
     for intent, patterns in INTENT_PATTERNS.items():
         for pattern in patterns:
@@ -72,9 +69,7 @@ def detect_requested_style(message: str) -> Optional[str]:
 
 
 def is_followup(message: str, history_text: str) -> bool:
-    """Cheap heuristic: short message + existing conversation history +
-    common follow-up markers suggests this builds on a prior answer rather
-    than starting a fresh reading."""
+    # Short message + existing history + followup markers suggests a followup
     if not history_text:
         return False
     word_count = len(message.split())
@@ -83,10 +78,6 @@ def is_followup(message: str, history_text: str) -> bool:
     return word_count <= 8 or has_marker
 
 
-# ------------------------------------------------------------------
-# Response contracts — the actual structural instruction injected into
-# the prompt per intent. This is what stops every answer looking the same.
-# ------------------------------------------------------------------
 RESPONSE_CONTRACTS: Dict[str, str] = {
     "simple_fact": (
         "This is a SIMPLE FACT question. Answer directly in 1 sentence "
@@ -124,3 +115,59 @@ RESPONSE_CONTRACTS: Dict[str, str] = {
 
 def get_response_contract(intent: str) -> str:
     return RESPONSE_CONTRACTS.get(intent, RESPONSE_CONTRACTS["general"])
+
+
+# ------------------------------------------------------------------
+# Chart-fact detection — questions answerable directly from Kundli data
+# ------------------------------------------------------------------
+CHART_FACT_PATTERNS = {
+    "ascendant": [r"\bmy ascendant\b", r"\bmera lagna\b", r"\blagna kya\b", r"\brising sign\b"],
+    "moon_sign": [r"\bmy moon sign\b", r"\bmera (chandra )?rashi\b", r"\bmoon sign kya\b"],
+    "sun_sign": [r"\bmy sun sign\b", r"\bmera surya rashi\b"],
+    "planet_position": [
+        r"\bwhere is (my )?(sun|moon|mars|mercury|jupiter|venus|saturn|rahu|ketu)\b",
+        r"\b(sun|moon|mars|mercury|jupiter|venus|saturn|rahu|ketu) (kis|which) (sign|rashi|house)\b",
+        r"\bmera (sun|moon|mars|mercury|jupiter|venus|saturn|rahu|ketu) kahan\b",
+    ],
+    "current_dasha": [r"\bmy current dasha\b", r"\bmeri current dasha\b", r"\bwhich dasha am i in\b", r"\babhi kaunsi dasha\b"],
+    "birth_details": [r"\bmy (dob|date of birth|birth time|birth place)\b", r"\bmera janm\b"],
+}
+
+
+def is_chart_fact_question(message: str) -> Optional[str]:
+    # Returns fact type if answerable directly from Kundli data, else None
+    text = message.lower()
+    for fact_type, patterns in CHART_FACT_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, text):
+                return fact_type
+    return None
+
+
+# ------------------------------------------------------------------
+# Query Router — top-level decision for RAG/Kundli/topic-bundle usage
+# ------------------------------------------------------------------
+KNOWLEDGE_ONLY_PATTERNS = [
+    r"\bwhat does .* mean\b", r"\bwhat is .* in vedic astrology\b",
+    r"\bkya matlab hai\b", r"\bwhat does .* signify\b",
+    r"\bwhat is the significance of\b", r"\bexplain .* yoga\b",
+    r"\bwhat is .*(dasha|yoga|nakshatra|graha)\b",
+]
+
+
+def route_query(message: str, history_text: str = "") -> str:
+    # Returns one of: chart_fact, knowledge, timing, analysis
+    if is_chart_fact_question(message):
+        return "chart_fact"
+
+    intent = classify_intent(message)
+    if intent == "timing":
+        return "timing"
+    if intent in ("explanation", "strength_check"):
+        return "analysis"
+
+    text = message.lower()
+    if any(re.search(p, text) for p in KNOWLEDGE_ONLY_PATTERNS):
+        return "knowledge"
+
+    return "analysis"
