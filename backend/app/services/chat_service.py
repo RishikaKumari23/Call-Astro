@@ -1,7 +1,8 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from datetime import datetime
 from difflib import SequenceMatcher
 import json
+import re
 from app.memory.database import db
 from app.services.llm_service import llm_service
 from app.services.geocoding_service import geocoding_service
@@ -11,7 +12,8 @@ from app.rag.embeddings import EmbeddingsProvider
 from app.prompts.templates import ASTROLOGER_PROMPT, MISSING_INFO_PROMPT
 from app.config.settings import settings
 from app.utils.logger import logger
-from app.services.intent_service import classify_intent, get_response_contract
+from app.services.intent_service import classify_intent, get_response_contract, is_chart_fact_question, route_query
+from app.services.chart_fact_service import answer_chart_fact
 from app.services.claim_validator import validate_claims, build_claim_correction_instructions
 from app.services.topic_service import (
     classify_topic, build_topic_emphasis, get_search_bias,
@@ -21,6 +23,8 @@ from app.services.topic_service import (
 )
 from app.services.dasha_api_service import dasha_api_service
 from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
+
+TOPIC_BUNDLE_LOGIC_VERSION = 1
 
 
 class ChatService:
@@ -51,11 +55,6 @@ class ChatService:
                 return time_str
 
     def _fetch_and_cache_kundli(self, session_id: str, session: Dict) -> str:
-        """Fetches Kundli + real Dasha data once, and ALSO pre-computes and
-        caches yoga_text right here — since yogas depend only on planets/
-        ascendant, not on topic, they never need recomputation for this
-        birth chart. This is the single expensive network round-trip;
-        everything downstream should read from cache, not refetch."""
         try:
             coords = geocoding_service.geocode(session.get("birth_place"))
             if not coords:
@@ -93,8 +92,8 @@ class ChatService:
                     "kundli_dasha": dasha_json,
                     "kundli_full_raw": full_raw_json,
                     "yoga_text": yoga_text,
-                    "topic_cache": None,        # invalidate any stale per-topic cache
-                    "dasha_tree_raw": None,     # invalidate — refetched lazily on next timeline need
+                    "topic_cache": None,
+                    "dasha_tree_raw": None,
                 }
                 db.update_session(session_id, updates)
                 session.update(updates)
@@ -104,63 +103,267 @@ class ChatService:
             logger.error(f"Kundli fetch failed: {kundli_err}")
 
         return "No chart data available."
-    
+
     def _get_rag_context(self, message_text: str, topic: Optional[str] = None):
-        """Retrieves top-K chunks, logs their relevance scores (so retrieval
-        quality is actually visible/debuggable), and DROPS chunks below
-        settings.MIN_RAG_RELEVANCE instead of silently feeding weak matches
-        to the LLM as if they were solid ground truth."""
+        """Returns (context_str, rag_hits). rag_hits is a list of dicts —
+        {"source", "page", "score", "text"} — one per retrieved chunk, with
+        the page number carried straight through from indexer.py's chunk
+        metadata (never guessed here or by the LLM). "page" is None for
+        non-PDF sources or for chunks indexed before page tracking was
+        added — callers/UI should simply omit the page line in that case."""
         try:
+            from app.services.topic_service import TOPIC_RELEVANT_BOOKS
+
             search_query = message_text
+            preferred_sources = None
             if topic:
                 bias = get_search_bias(topic)
                 if bias:
                     search_query = f"{message_text} {bias}"
+                preferred_sources = TOPIC_RELEVANT_BOOKS.get(topic)
 
-            query_vector = self.embeddings_provider.get_embedding(search_query)
-            hits = vector_store.hybrid_search(
-                query=search_query, query_vector=query_vector,
-                top_k=settings.TOP_K_RETRIEVAL, alpha=settings.HYBRID_ALPHA
+            query_vector_topic = self.embeddings_provider.get_embedding(search_query)
+            query_vector_global = self.embeddings_provider.get_embedding(message_text)
+
+            hits = vector_store.dual_retrieve(
+                topic_query=search_query,
+                global_query=message_text,
+                query_vector_topic=query_vector_topic,
+                query_vector_global=query_vector_global,
+                preferred_sources=preferred_sources,
+                top_k_each=6,
+                final_top_k=settings.TOP_K_RETRIEVAL,
+                alpha=settings.HYBRID_ALPHA,
             )
 
-            logger.info(f"[RAG] query='{search_query}' topic={topic} raw_hits={len(hits)}")
+            logger.info(f"[RAG] dual_retrieve query='{search_query}' topic={topic} hits={len(hits)}")
             for i, hit in enumerate(hits):
                 logger.info(
                     f"[RAG]   #{i+1} score={hit['score']:.3f} "
-                    f"(semantic={hit['semantic_score']:.3f}, lexical={hit['lexical_score']:.3f}) "
-                    f"source={hit['metadata'].get('source', 'Unknown')}"
+                    f"source={hit['metadata'].get('source', 'Unknown')} "
+                    f"page={hit['metadata'].get('page')}"
                 )
 
             relevant_hits = [h for h in hits if h["score"] >= settings.MIN_RAG_RELEVANCE]
-            dropped = len(hits) - len(relevant_hits)
-            if dropped > 0:
-                logger.info(
-                    f"[RAG] dropped {dropped}/{len(hits)} chunk(s) below "
-                    f"relevance threshold {settings.MIN_RAG_RELEVANCE}"
-                )
-
             if not relevant_hits:
                 logger.info("[RAG] no sufficiently relevant chunks — proceeding with no book context")
                 return "No reference available.", []
 
             context_chunks = []
-            sources = []
+            rag_hits = []
             for i, hit in enumerate(relevant_hits):
                 source = hit["metadata"].get("source", "Unknown")
-                sources.append(source)
+                page = hit["metadata"].get("page")  # real page number, or None — never fabricated
+                page_label = f", Page: {page}" if page is not None else ""
                 context_chunks.append(
-                    f"--- Context {i+1} [Source: {source}, relevance: {hit['score']:.2f}] ---\n{hit['text']}\n"
+                    f"--- Context {i+1} [Source: {source}{page_label}, relevance: {hit['score']:.2f}] ---\n{hit['text']}\n"
                 )
+                rag_hits.append({
+                    "source": source,
+                    "page": page,
+                    "score": hit["score"],
+                    "text": hit["text"],
+                })
 
-            return "\n".join(context_chunks), sources
+            return "\n".join(context_chunks), rag_hits
         except Exception as rag_err:
             logger.error(f"RAG failed: {rag_err}")
             return "No reference available.", []
-    
+
+    def _build_framework_query(self, message_text: str, topic: Optional[str] = None) -> str:
+        """Build a RAG query aimed at classical principles, not the user's chart.
+
+        The purpose of this first retrieval pass is to discover what classical
+        astrology says should be examined for the question. It intentionally does
+        not inject the user's planetary placements.
+        """
+        base = message_text.strip()
+        parts = [base, "classical astrology principles rules indications relevant factors"]
+        if topic:
+            bias = get_search_bias(topic)
+            if bias:
+                parts.append(bias)
+        return " ".join(p for p in parts if p).strip()
+
+    def _extract_referenced_factors(self, rag_hits: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
+        """Extract chart factors explicitly discussed by retrieved book passages.
+
+        This is deliberately a lightweight first version. It does not encode
+        astrological meanings; it only identifies the entities mentioned by the
+        retrieved evidence so the corresponding chart facts can be surfaced.
+        """
+        houses: Set[str] = set()
+        planets: Set[str] = set()
+        charts: Set[str] = set()
+        concepts: Set[str] = set()
+
+        planet_names = [
+            "Sun", "Moon", "Mars", "Mercury", "Jupiter", "Venus",
+            "Saturn", "Rahu", "Ketu", "Ascendant"
+        ]
+        house_pattern = re.compile(r"\b(1[0-2]|[1-9])(?:st|nd|rd|th)\s+house\b", re.IGNORECASE)
+        chart_pattern = re.compile(r"\bD(?:1|7|9|10|24)\b", re.IGNORECASE)
+
+        for hit in rag_hits:
+            text = hit.get("text", "") or ""
+            lower = text.lower()
+
+            for planet in planet_names:
+                if planet.lower() in lower:
+                    planets.add(planet)
+
+            for match in house_pattern.finditer(text):
+                houses.add(match.group(1))
+
+            for match in chart_pattern.finditer(text):
+                charts.add(match.group(0).upper())
+
+            # These are concepts, not hard-coded interpretations. They tell the
+            # targeted-context builder what additional timing/relationship data
+            # may be useful when the books explicitly mention them.
+            for phrase in (
+                "7th lord", "10th lord", "6th lord", "8th lord", "9th lord",
+                "11th lord", "2nd lord", "12th lord", "lagna lord",
+                "mahadasha", "antardasha", "dasha", "transit"
+            ):
+                if phrase in lower:
+                    concepts.add(phrase)
+
+        return {"houses": houses, "planets": planets, "charts": charts, "concepts": concepts}
+
+    def _build_targeted_kundli_facts(self, referenced: Dict[str, Set[str]], session: Dict) -> str:
+        """Build only the chart/Dasha facts needed by the retrieved framework.
+
+        Kundli/Dasha data is read from the existing session cache; this helper
+        does not make additional external API calls.
+        """
+        cached_raw = session.get("kundli_raw")
+        cached_dasha = session.get("kundli_dasha")
+        if not cached_raw:
+            return ""
+
+        try:
+            parsed = json.loads(cached_raw)
+            planets = parsed.get("planets", []) or []
+            ascendant_sign = parsed.get("ascendant_sign")
+            dasha_info = json.loads(cached_dasha) if cached_dasha else None
+        except Exception as e:
+            logger.error(f"Failed to parse cached chart data for RAG-first context: {e}")
+            return ""
+
+        from app.services.topic_service import get_house_for_sign
+        from app.services.kundli_service import get_house_lord
+
+        houses = referenced.get("houses", set())
+        planets_wanted = referenced.get("planets", set())
+        charts = referenced.get("charts", set())
+        concepts = referenced.get("concepts", set())
+        lines: List[str] = []
+
+        if ascendant_sign and ("Ascendant" in planets_wanted or houses or "lagna lord" in concepts):
+            lines.append(f"Ascendant: {ascendant_sign}")
+
+        if houses and ascendant_sign:
+            lines.append("Relevant house facts (selected from retrieved classical evidence):")
+            for house_str in sorted(houses, key=lambda x: int(x)):
+                house_num = int(house_str)
+                lord = get_house_lord(house_num, ascendant_sign)
+                occupants = [
+                    p.get("name") for p in planets
+                    if p.get("name") and get_house_for_sign(p.get("sign_name", ""), ascendant_sign) == house_num
+                ]
+                occupant_str = f", occupied by {', '.join(occupants)}" if occupants else ""
+                lord_str = f"ruled by {lord}" if lord else "lord undetermined"
+                lines.append(f"- House {house_num}: {lord_str}{occupant_str}")
+
+        if planets_wanted:
+            lines.append("Relevant planet facts (selected from retrieved classical evidence):")
+            for planet_name in sorted(planets_wanted):
+                if planet_name == "Ascendant":
+                    continue
+                match = next((p for p in planets if p.get("name") == planet_name), None)
+                if not match:
+                    continue
+                sign = match.get("sign_name", "")
+                house = get_house_for_sign(sign, ascendant_sign) if ascendant_sign else None
+                house_str = f", house {house}" if house else ""
+                retro = " (retrograde)" if str(match.get("isRetro", "")).lower() == "true" else ""
+                lines.append(f"- {planet_name}: {sign}{house_str}{retro}")
+
+        if dasha_info and ("dasha" in concepts or "mahadasha" in concepts or "antardasha" in concepts or not lines):
+            maha = dasha_info.get("current_mahadasha", {}) or {}
+            antar = dasha_info.get("current_antardasha", {}) or {}
+            if maha:
+                dasha_line = f"Current Dasha: Mahadasha={maha.get('lord')}"
+                if antar:
+                    dasha_line += f", Antardasha={antar.get('lord')}"
+                lines.append(dasha_line)
+
+        if charts:
+            # The full divisional chart remains available through the existing
+            # topic-bundle path. We only record which divisional chart the books
+            # explicitly referenced so the LLM knows why it may matter.
+            lines.append(f"Divisional charts referenced by classical evidence: {', '.join(sorted(charts))}")
+
+        return "\n".join(lines)
+
+    def _get_rag_first_context(self, message_text: str, topic: Optional[str], session: Dict):
+        """RAG-first context: retrieve classical framework, then target cached chart facts."""
+        try:
+            from app.services.topic_service import TOPIC_RELEVANT_BOOKS
+
+            framework_query = self._build_framework_query(message_text, topic)
+            preferred_sources = TOPIC_RELEVANT_BOOKS.get(topic) if topic else None
+
+            query_vector_topic = self.embeddings_provider.get_embedding(framework_query)
+            query_vector_global = self.embeddings_provider.get_embedding(message_text)
+
+            hits = vector_store.dual_retrieve(
+                topic_query=framework_query,
+                global_query=message_text,
+                query_vector_topic=query_vector_topic,
+                query_vector_global=query_vector_global,
+                preferred_sources=preferred_sources,
+                top_k_each=6,
+                final_top_k=settings.TOP_K_RETRIEVAL,
+                alpha=settings.HYBRID_ALPHA,
+            )
+
+            relevant_hits = [h for h in hits if h["score"] >= settings.MIN_RAG_RELEVANCE]
+            if not relevant_hits:
+                logger.info("[RAGFirst] no sufficiently relevant framework chunks")
+                return "No reference available.", [], ""
+
+            context_chunks = []
+            rag_hits = []
+            for i, hit in enumerate(relevant_hits):
+                source = hit["metadata"].get("source", "Unknown")
+                page = hit["metadata"].get("page")
+                page_label = f", Page: {page}" if page is not None else ""
+                context_chunks.append(
+                    f"--- Classical Principle {i+1} [Source: {source}{page_label}, relevance: {hit['score']:.2f}] ---\n{hit['text']}\n"
+                )
+                rag_hits.append({
+                    "source": source, "page": page, "score": hit["score"], "text": hit["text"]
+                })
+
+            referenced = self._extract_referenced_factors(rag_hits)
+            targeted_facts = self._build_targeted_kundli_facts(referenced, session)
+
+            logger.info(
+                f"[RAGFirst] framework factors houses={referenced['houses']} "
+                f"planets={referenced['planets']} charts={referenced['charts']} "
+                f"concepts={referenced['concepts']}"
+            )
+
+            return "\n".join(context_chunks), rag_hits, targeted_facts
+        except Exception as e:
+            logger.error(f"RAG-first context build failed: {e}")
+            return "No reference available.", [], ""
+
     # ------------------------------------------------------------------
-    # Per-topic cache — bundles emphasis/divisional/consistency/missing-
-    # evidence/timeline/evidence_vote into ONE JSON blob keyed by topic,
-    # so asking the SAME topic again in a session reuses everything instantly.
+    # Per-topic cache — see TOPIC_BUNDLE_LOGIC_VERSION above for the
+    # staleness-on-deploy fix.
     # ------------------------------------------------------------------
     def _get_topic_cache(self, session: Dict, topic: str) -> Optional[Dict]:
         raw = session.get("topic_cache")
@@ -168,7 +371,16 @@ class ChatService:
             return None
         try:
             cache = json.loads(raw)
-            return cache.get(topic)
+            entry = cache.get(topic)
+            if not entry:
+                return None
+            if entry.get("_version") != TOPIC_BUNDLE_LOGIC_VERSION:
+                logger.info(
+                    f"Topic cache for '{topic}' is stale "
+                    f"(v{entry.get('_version')} != v{TOPIC_BUNDLE_LOGIC_VERSION}) — recomputing"
+                )
+                return None
+            return entry
         except Exception:
             return None
 
@@ -176,7 +388,9 @@ class ChatService:
         try:
             raw = session.get("topic_cache")
             cache = json.loads(raw) if raw else {}
-            cache[topic] = bundle
+            bundle_to_store = dict(bundle)
+            bundle_to_store["_version"] = TOPIC_BUNDLE_LOGIC_VERSION
+            cache[topic] = bundle_to_store
             cache_json = json.dumps(cache, ensure_ascii=False)
             db.update_session(session_id, {"topic_cache": cache_json})
             session["topic_cache"] = cache_json
@@ -184,9 +398,6 @@ class ChatService:
             logger.error(f"Failed to save topic cache for '{topic}': {e}")
 
     def _get_topic_bundle(self, session_id: str, session: Dict, topic: Optional[str], language: str) -> Dict[str, Any]:
-        """Returns {emphasis, divisional, consistency, missing_evidence,
-        timeline, evidence_vote} for this topic — from cache if already
-        computed this session, otherwise computes once and caches."""
         empty = {"emphasis": "", "divisional": "", "consistency": "", "missing_evidence": "", "timeline": "", "evidence_vote": None}
         if not topic:
             return empty
@@ -194,9 +405,7 @@ class ChatService:
         cached = self._get_topic_cache(session, topic)
         if cached is not None:
             logger.info(f"Using cached topic bundle for '{topic}'")
-            if "evidence_vote" not in cached:
-                cached["evidence_vote"] = None
-            return cached
+            return {k: cached.get(k, empty[k]) for k in empty}
 
         bundle = dict(empty)
         try:
@@ -220,9 +429,7 @@ class ChatService:
                 bundle["evidence_vote"] = vote
                 vote_text = format_evidence_vote_for_prompt(vote, topic)
                 if vote_text:
-                    bundle["consistency"] = (
-                        f"{bundle['consistency']}\n\n{vote_text}" if bundle["consistency"] else vote_text
-                    )
+                    bundle["consistency"] = f"{bundle['consistency']}\n\n{vote_text}" if bundle["consistency"] else vote_text
 
                 config = TOPIC_CHART_FACTORS.get(topic, {})
                 chart_code = config.get("divisional_chart")
@@ -234,9 +441,7 @@ class ChatService:
                             kundli_data, chart_code, purpose_map.get(chart_code, chart_code)
                         )
 
-                bundle["missing_evidence"] = build_missing_evidence_note(
-                    topic, planets, ascendant_sign, dasha_info, bundle["divisional"]
-                )
+                bundle["missing_evidence"] = build_missing_evidence_note(topic, planets, ascendant_sign, dasha_info, bundle["divisional"])
 
             bundle["timeline"] = self._get_dasha_timeline(session_id, session, topic, language)
         except Exception as e:
@@ -295,13 +500,10 @@ class ChatService:
         return session.get("yoga_text") or ""
 
     def _build_final_kundli_data(self, kundli_str: str, topic_emphasis: str, divisional_text: str,
-                                   yoga_text: str, missing_evidence: str = "") -> str:
-        parts = [p for p in [kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence] if p]
+                                   yoga_text: str, missing_evidence: str = "", event_timing: str = "") -> str:
+        parts = [p for p in [kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence, event_timing] if p]
         return "\n\n".join(parts)
 
-    # ------------------------------------------------------------------
-    # Response Novelty Checker
-    # ------------------------------------------------------------------
     def _get_recent_assistant_texts(self, session_id: str, limit: int = 5) -> List[str]:
         history = db.get_history(session_id, limit=20)
         assistant_msgs = [m["content"] for m in history if m["role"] == "assistant"]
@@ -386,6 +588,15 @@ class ChatService:
             logger.error(f"Follow-up suggestion generation failed: {followup_err}")
             return []
 
+    def _try_chart_fact_answer(self, session_id: str, session: Dict, message_text: str, language: str) -> Optional[str]:
+        fact_type = is_chart_fact_question(message_text)
+        if not fact_type:
+            return None
+        direct_answer = answer_chart_fact(fact_type, message_text, session, language)
+        if direct_answer:
+            logger.info(f"Chart-fact fast path: '{fact_type}' answered directly, RAG skipped")
+        return direct_answer
+
     # ------------------------------------------------------------------
     # NON-STREAMING — POST /api/chat
     # ------------------------------------------------------------------
@@ -404,6 +615,16 @@ class ChatService:
                 language = session.get("language", "Hinglish")
                 db.add_message(session_id, "user", message_text)
                 missing_fields = []
+
+                direct_answer = self._try_chart_fact_answer(session_id, session, message_text, language)
+                if direct_answer:
+                    db.add_message(session_id, "assistant", direct_answer)
+                    return {
+                        "session_id": session_id, "message": direct_answer,
+                        "dob": session.get("dob"), "birth_time": session.get("birth_time"),
+                        "birth_place": session.get("birth_place"), "language": language,
+                        "suggestions": []
+                    }
             else:
                 try:
                     extracted = llm_service.extract_profile_details(message_text, history_text)
@@ -449,25 +670,35 @@ class ChatService:
                         "birth_place": session.get("birth_place"), "language": language
                     }
 
+            route = route_query(message_text, history_text) if (is_astrology and not missing_fields) else "analysis"
             topic = classify_topic(message_text) if (is_astrology and not missing_fields) else None
             intent = classify_intent(message_text) if (is_astrology and not missing_fields) else "general"
             response_contract = get_response_contract(intent)
+            logger.info(f"Query routed as: '{route}' (topic={topic}, intent={intent})")
 
-            context_str = ""
-            rag_sources = []
-            if is_astrology and not missing_fields:
-                context_str, rag_sources = self._get_rag_context(message_text, topic)
-
+            # Fetch/cache the Kundli first so RAG can select targeted chart facts from it.
             kundli_str = "No chart data available."
-            if is_astrology and not missing_fields:
+            if is_astrology and not missing_fields and route in ("timing", "analysis"):
                 cached_kundli = session.get("kundli_data")
                 kundli_str = cached_kundli if cached_kundli else self._fetch_and_cache_kundli(session_id, session)
 
-            yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields) else ""
+            context_str = ""
+            rag_hits: List[Dict[str, Any]] = []
+            targeted_facts = ""
+
+            # For interpretation/timing questions, RAG determines which classical
+            # factors should be surfaced from the user's already-cached chart.
+            # Chart-fact questions continue to use the direct fast path.
+            if is_astrology and not missing_fields and route in ("timing", "analysis"):
+                context_str, rag_hits, targeted_facts = self._get_rag_first_context(message_text, topic, session)
+            elif is_astrology and not missing_fields and route != "chart_fact":
+                context_str, rag_hits = self._get_rag_context(message_text, topic)
+
+            yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields and route in ("timing", "analysis")) else ""
 
             topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = ""
             evidence_vote = None
-            if is_astrology and not missing_fields and topic:
+            if is_astrology and not missing_fields and topic and route in ("timing", "analysis"):
                 bundle = self._get_topic_bundle(session_id, session, topic, language)
                 topic_emphasis = bundle["emphasis"]
                 divisional_text = bundle["divisional"]
@@ -477,7 +708,9 @@ class ChatService:
                 evidence_vote = bundle.get("evidence_vote")
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
-            user_memory = self._get_user_memory_block(session, topic) if (is_astrology and not missing_fields) else ""
+            if targeted_facts:
+                final_kundli_data = f"{final_kundli_data}\n\n{targeted_facts}" if final_kundli_data else targeted_facts
+            user_memory = self._get_user_memory_block(session, topic) if (is_astrology and not missing_fields and route in ("timing", "analysis")) else ""
 
             try:
                 astrologer_prompt = ASTROLOGER_PROMPT.format(
@@ -497,7 +730,6 @@ class ChatService:
                 if is_astrology and not missing_fields:
                     recent_texts = self._get_recent_assistant_texts(session_id)
                     similar_to = self._is_too_similar(response_text, recent_texts)
-
                     claim_failures = validate_claims(response_text, dasha_timeline_str, evidence_vote)
 
                     if similar_to or claim_failures:
@@ -515,8 +747,6 @@ class ChatService:
 
                         response_text = llm_service.generate(prompt=retry_prompt, temperature=0.75)
 
-                        # Re-validate once after the fix attempt, log-only —
-                        # don't loop indefinitely if the model still misses it.
                         remaining = validate_claims(response_text, dasha_timeline_str, evidence_vote)
                         if remaining:
                             logger.warning(f"Claim validation still found {len(remaining)} issue(s) after regeneration")
@@ -528,7 +758,7 @@ class ChatService:
 
             if is_astrology and not missing_fields:
                 try:
-                    trace = self._build_reasoning_trace(session, topic, rag_sources)
+                    trace = self._build_reasoning_trace(session, topic, rag_hits, targeted_facts)
                     db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
                 except Exception as trace_err:
                     logger.error(f"Reasoning trace caching failed: {trace_err}")
@@ -568,6 +798,16 @@ class ChatService:
                 language = session.get("language", "Hinglish")
                 db.add_message(session_id, "user", message_text)
                 missing_fields = []
+
+                direct_answer = self._try_chart_fact_answer(session_id, session, message_text, language)
+                if direct_answer:
+                    yield {"type": "chunk", "text": direct_answer}
+                    db.add_message(session_id, "assistant", direct_answer)
+                    yield {"type": "done", "session_id": session_id, "message": direct_answer,
+                           "dob": session.get("dob"), "birth_time": session.get("birth_time"),
+                           "birth_place": session.get("birth_place"), "language": language,
+                           "suggestions": []}
+                    return
             else:
                 try:
                     extracted = llm_service.extract_profile_details(message_text, history_text)
@@ -617,25 +857,32 @@ class ChatService:
                            "birth_place": session.get("birth_place"), "language": language}
                     return
 
+            route = route_query(message_text, history_text) if (is_astrology and not missing_fields) else "analysis"
             topic = classify_topic(message_text) if (is_astrology and not missing_fields) else None
             intent = classify_intent(message_text) if (is_astrology and not missing_fields) else "general"
             response_contract = get_response_contract(intent)
+            logger.info(f"Query routed as: '{route}' (topic={topic}, intent={intent})")
 
-            context_str = ""
-            rag_sources = []
-            if is_astrology and not missing_fields:
-                context_str, rag_sources = self._get_rag_context(message_text, topic)
-
+            # Fetch/cache the Kundli first so RAG can select targeted chart facts from it.
             kundli_str = "No chart data available."
-            if is_astrology and not missing_fields:
+            if is_astrology and not missing_fields and route in ("timing", "analysis"):
                 cached_kundli = session.get("kundli_data")
                 kundli_str = cached_kundli if cached_kundli else self._fetch_and_cache_kundli(session_id, session)
 
-            yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields) else ""
+            context_str = ""
+            rag_hits: List[Dict[str, Any]] = []
+            targeted_facts = ""
+
+            if is_astrology and not missing_fields and route in ("timing", "analysis"):
+                context_str, rag_hits, targeted_facts = self._get_rag_first_context(message_text, topic, session)
+            elif is_astrology and not missing_fields and route != "chart_fact":
+                context_str, rag_hits = self._get_rag_context(message_text, topic)
+
+            yoga_text = self._get_yoga_text(session) if (is_astrology and not missing_fields and route in ("timing", "analysis")) else ""
 
             topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = ""
             evidence_vote = None
-            if is_astrology and not missing_fields and topic:
+            if is_astrology and not missing_fields and topic and route in ("timing", "analysis"):
                 bundle = self._get_topic_bundle(session_id, session, topic, language)
                 topic_emphasis = bundle["emphasis"]
                 divisional_text = bundle["divisional"]
@@ -645,10 +892,12 @@ class ChatService:
                 evidence_vote = bundle.get("evidence_vote")
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
+            if targeted_facts:
+                final_kundli_data = f"{final_kundli_data}\n\n{targeted_facts}" if final_kundli_data else targeted_facts
 
             user_memory = ""
             repeat_hint = ""
-            if is_astrology and not missing_fields:
+            if is_astrology and not missing_fields and route in ("timing", "analysis"):
                 user_memory = self._get_user_memory_block(session, topic)
                 repeat_hint = self._get_repeat_topic_hint(session, topic)
 
@@ -681,10 +930,6 @@ class ChatService:
 
             db.add_message(session_id, "assistant", full_text)
 
-            # Claim validation is LOG-ONLY here — tokens are already streamed
-            # to the user, so there's nothing left to regenerate cleanly.
-            # This still gives you visibility into hallucination rate for
-            # streamed responses without breaking the streaming UX.
             if is_astrology and not missing_fields:
                 try:
                     claim_failures = validate_claims(full_text, dasha_timeline_str, evidence_vote)
@@ -695,7 +940,7 @@ class ChatService:
 
             if is_astrology and not missing_fields:
                 try:
-                    trace = self._build_reasoning_trace(session, topic, rag_sources)
+                    trace = self._build_reasoning_trace(session, topic, rag_hits, targeted_facts)
                     db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
                 except Exception as trace_err:
                     logger.error(f"Reasoning trace caching failed: {trace_err}")
@@ -715,30 +960,132 @@ class ChatService:
             yield {"type": "done", "session_id": session_id, "message": fallback,
                    "dob": None, "birth_time": None, "birth_place": None, "language": "Hinglish"}
 
-    def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits_sources: Optional[List[str]] = None) -> list:
-        if not topic:
-            return []
+    def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits: Optional[List[Dict[str, Any]]] = None, targeted_facts: str = "") -> list:
+        """Build an auditable RAG-first reasoning trace."""
         try:
-            cached_raw = session.get("kundli_raw")
-            cached_dasha = session.get("kundli_dasha")
-            if not cached_raw:
-                return []
-            parsed = json.loads(cached_raw)
-            planets = parsed.get("planets", [])
-            ascendant_sign = parsed.get("ascendant_sign")
-            dasha_info = json.loads(cached_dasha) if cached_dasha else None
+            rag_hits = rag_hits or []
+            referenced = self._extract_referenced_factors(rag_hits)
+            houses = sorted(referenced.get("houses", set()), key=lambda x: int(x))
+            planets = sorted(referenced.get("planets", set()))
+            charts = sorted(referenced.get("charts", set()))
+            concepts = sorted(referenced.get("concepts", set()))
+            steps = []
 
-            from app.services.topic_service import build_consistency_check, build_reasoning_trace
-            consistency_check = build_consistency_check(topic, planets, ascendant_sign, dasha_info)
+            framework_lines = []
+            if houses:
+                house_labels = []
+                for h in houses:
+                    suffix = "th"
+                    if h == "1":
+                        suffix = "st"
+                    elif h == "2":
+                        suffix = "nd"
+                    elif h == "3":
+                        suffix = "rd"
+                    house_labels.append(f"{h}{suffix}")
+                framework_lines.append(f"Houses: {', '.join(house_labels)}")
+            if planets:
+                framework_lines.append(f"Planets: {', '.join(planets)}")
+            if charts:
+                framework_lines.append(f"Divisional charts: {', '.join(charts)}")
+            if concepts:
+                framework_lines.append(f"Concepts: {', '.join(concepts)}")
 
-            topic_cache = self._get_topic_cache(session, topic)
-            evidence_vote = topic_cache.get("evidence_vote") if topic_cache else None
+            if framework_lines:
+                framework_detail = "RAG retrieved classical sources and identified the following factors as relevant:\n" + "\n".join(f"• {line}" for line in framework_lines)
+            else:
+                framework_detail = "RAG retrieved classical sources, but no specific chart factors were confidently identified."
 
-            return build_reasoning_trace(
-                topic, ascendant_sign, planets, dasha_info, consistency_check, rag_hits_sources, evidence_vote
-            )
+            steps.append({"step": 1, "title": "Classical Framework Retrieved", "detail": framework_detail, "type": "rag"})
+
+            if targeted_facts:
+                chart_detail = "The user's Kundli was examined for the factors identified by the retrieved classical sources.\n\n" + targeted_facts
+            else:
+                chart_detail = "No targeted chart facts were identified from the retrieved classical framework."
+
+            steps.append({"step": 2, "title": "Relevant Chart Factors", "detail": chart_detail, "type": "chart"})
+
+            dasha_detail = ""
+            try:
+                cached_dasha = session.get("kundli_dasha")
+                if cached_dasha:
+                    dasha_info = json.loads(cached_dasha)
+                    maha = dasha_info.get("current_mahadasha", {}) or {}
+                    antar = dasha_info.get("current_antardasha", {}) or {}
+                    maha_lord = maha.get("lord") or maha.get("name") or maha.get("planet")
+                    antar_lord = antar.get("lord") or antar.get("name") or antar.get("planet")
+                    if maha_lord:
+                        dasha_detail = f"Mahadasha: {maha_lord}"
+                    if antar_lord:
+                        dasha_detail += f"\nAntardasha: {antar_lord}"
+            except Exception as dasha_err:
+                logger.warning(f"Could not build Dasha reasoning trace: {dasha_err}")
+
+            if not dasha_detail:
+                dasha_detail = "Current Dasha information is available through the chart and timing analysis."
+
+            steps.append({"step": 3, "title": "Dasha & Timing", "detail": dasha_detail, "type": "dasha"})
+
+            reference_lines = []
+            seen_references = set()
+            for hit in rag_hits:
+                source = hit.get("source", "Unknown source")
+                page = hit.get("page")
+                score = hit.get("score")
+                reference_key = (source, page)
+                if reference_key in seen_references:
+                    continue
+                seen_references.add(reference_key)
+                reference = f"{source} — Page {page}" if page is not None else source
+                if score is not None:
+                    try:
+                        reference += f" (relevance: {float(score):.2f})"
+                    except (TypeError, ValueError):
+                        pass
+                reference_lines.append(f"• {reference}")
+
+            evidence_detail = "\n".join(reference_lines) if reference_lines else "No classical references were available."
+            steps.append({"step": 4, "title": "Classical Evidence", "detail": evidence_detail, "type": "evidence"})
+
+            synthesis_lines = []
+            try:
+                if topic:
+                    topic_cache = self._get_topic_cache(session, topic)
+                    if topic_cache:
+                        evidence_vote = topic_cache.get("evidence_vote")
+                        consistency = topic_cache.get("consistency", "")
+                        if evidence_vote:
+                            if isinstance(evidence_vote, dict):
+                                dasha_vote = evidence_vote.get("dasha")
+                                chart_vote = evidence_vote.get("chart")
+                                yoga_vote = evidence_vote.get("yogas")
+                                overall = evidence_vote.get("overall")
+                                confidence = evidence_vote.get("confidence")
+                                if dasha_vote:
+                                    synthesis_lines.append(f"Dasha Timing: {dasha_vote}")
+                                if chart_vote:
+                                    synthesis_lines.append(f"Chart Placement: {chart_vote}")
+                                if yoga_vote:
+                                    synthesis_lines.append(f"Yogas: {yoga_vote}")
+                                if confidence is not None:
+                                    synthesis_lines.append(f"Overall confidence: {confidence}%")
+                                if overall:
+                                    synthesis_lines.append(f"Overall verdict: {overall}")
+                            else:
+                                synthesis_lines.append(str(evidence_vote))
+                        if consistency:
+                            synthesis_lines.append(f"\nSignal consistency:\n{consistency}")
+            except Exception as evidence_err:
+                logger.warning(f"Could not build evidence synthesis trace: {evidence_err}")
+
+            if not synthesis_lines:
+                synthesis_lines.append("The final interpretation combines the retrieved classical evidence with the relevant Kundli and Dasha information.")
+
+            steps.append({"step": 5, "title": "Evidence Synthesis", "detail": "\n".join(synthesis_lines), "type": "synthesis"})
+            logger.info(f"[RAGFirst] Reasoning trace built: {len(steps)} steps")
+            return steps
         except Exception as e:
-            logger.error(f"Reasoning trace build failed: {e}")
+            logger.error(f"RAG-first reasoning trace build failed: {e}")
             return []
 
     def _get_full_kundli_response(self, session_id: str, session: Dict) -> Optional[Dict]:

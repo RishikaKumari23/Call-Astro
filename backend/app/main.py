@@ -34,7 +34,7 @@ def background_index_knowledge_base():
         if vector_store.vectors is not None and len(vector_store.chunks) > 0:
             logger.info(f"✓ Existing vector store loaded: {len(vector_store.chunks)} chunks already indexed.")
             # Still check for any NEW files that weren't indexed yet
-            processed_files, total_chunks = document_indexer.ingest_knowledge_base(force_rebuild=False)
+            processed_files, total_chunks = document_indexer.ingest_knowledge_base()
             if processed_files:
                 logger.info(f"✓ Indexed {len(processed_files)} new file(s), added chunks. Total now: {len(vector_store.chunks)}")
             else:
