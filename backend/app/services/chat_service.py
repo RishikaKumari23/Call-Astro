@@ -684,7 +684,12 @@ class ChatService:
                     yield {"type": "chunk", "text": token}
             except Exception as gen_err:
                 logger.error(f"Streaming generation failed: {gen_err}")
-                full_text = f"DEBUG ERROR: {gen_err}"
+                if language == "English":
+                    full_text = "I'm sorry, I had some trouble processing that."
+                elif language == "Hindi":
+                    full_text = "मुझे समझने में कुछ परेशानी हो गई।"
+                else:
+                    full_text = "Mujhe samajhne mein kuch pareshani ho gayi."
                 yield {"type": "chunk", "text": full_text}
 
             db.add_message(session_id, "assistant", full_text)
