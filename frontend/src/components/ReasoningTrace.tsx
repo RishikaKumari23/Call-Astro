@@ -156,7 +156,7 @@ export default function ReasoningTrace({
           ) : (
             <ol className="space-y-4">
               {steps.map((s, index) => {
-                const Icon = STEP_ICONS[s.type || 'general'];
+                const Icon = STEP_ICONS[s.type as keyof typeof STEP_ICONS] || Sparkles;
 
                 return (
                   <li
