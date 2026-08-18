@@ -185,8 +185,12 @@ function App() {
             setBirthPlace(event.birth_place);
             setLanguage(event.language);
             if (event.suggestions && Array.isArray(event.suggestions)) {
-              const fresh = event.suggestions.filter((s: string) => !seenSuggestions.current.has(s)).slice(0, 3);
-              fresh.forEach((s: string) => seenSuggestions.current.add(s));
+              let fresh = event.suggestions.filter((s: string) => !seenSuggestions.current.has(s)).slice(0, 3);
+              if (fresh.length === 0) {
+                fresh = event.suggestions.slice(0, 3); // Fallback to seen ones if exhausted
+              } else {
+                fresh.forEach((s: string) => seenSuggestions.current.add(s));
+              }
               setSuggestions(fresh);
             }
             setTraceRefreshKey(prev => prev + 1);
