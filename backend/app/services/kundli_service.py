@@ -266,6 +266,19 @@ class KundliService:
             if planet_lines:
                 lines.append("Planetary positions: " + ", ".join(planet_lines))
 
+            if ascendant_sign and ascendant_sign in ZODIAC:
+                ZODIAC_LORDS = {
+                    "Aries": "Mars", "Taurus": "Venus", "Gemini": "Mercury", "Cancer": "Moon",
+                    "Leo": "Sun", "Virgo": "Mercury", "Libra": "Venus", "Scorpio": "Mars",
+                    "Sagittarius": "Jupiter", "Capricorn": "Saturn", "Aquarius": "Saturn", "Pisces": "Jupiter"
+                }
+                house_rulerships = []
+                for h in range(1, 13):
+                    sign_idx = (asc_index + h - 1) % 12
+                    sign_name = ZODIAC[sign_idx]
+                    house_rulerships.append(f"{h}th House ({sign_name}, ruled by {ZODIAC_LORDS[sign_name]})")
+                lines.append("House Rulerships: " + ", ".join(house_rulerships))
+
             chart_positions = kundli_data.get("chart_planet_positions", {})
             d9 = chart_positions.get("D9", {}) if chart_positions else {}
             d9_asc = d9.get("Ascendant", {}).get("sign_name") if d9 else None
