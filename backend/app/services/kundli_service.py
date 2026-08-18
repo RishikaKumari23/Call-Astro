@@ -300,7 +300,7 @@ class KundliService:
                     dasha_line += f", Pratyantardasha={praty['lord']}"
                 lines.append(dasha_line)
 
-                if len(dasha_info["dasha_sequence"]) > 1:
+                if "dasha_sequence" in dasha_info and len(dasha_info["dasha_sequence"]) > 1:
                     nxt = dasha_info["dasha_sequence"][1]
                     if dob:
                         try:
