@@ -200,7 +200,7 @@ class KundliService:
             logger.error(f"Failed to derive dasha inputs: {e}")
             return None
 
-    def summarize_kundli(self, kundli_data: Dict, dob: Optional[str] = None) -> str:
+    def summarize_kundli(self, kundli_data: Dict, dob: Optional[str] = None, dasha_info: Optional[Dict] = None) -> str:
         try:
             lines = []
             positions = kundli_data.get("planetary_positions", [])
@@ -272,7 +272,9 @@ class KundliService:
             if d9_asc:
                 lines.append(f"Navamsa (D9) Ascendant: {d9_asc}")
 
-            dasha_info = self._get_dasha_for_kundli(kundli_data)
+            if not dasha_info:
+                dasha_info = self._get_dasha_for_kundli(kundli_data)
+            
             if dasha_info:
                 maha = dasha_info["current_mahadasha"]
                 antar = dasha_info.get("current_antardasha")

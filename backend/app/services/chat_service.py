@@ -73,7 +73,7 @@ class ChatService:
                 dasha_info = kundli_service.get_real_or_calculated_dasha(
                     kundli_data, session.get("dob"), time_24h, lat, lon
                 )
-                kundli_str = kundli_service.summarize_kundli(kundli_data, dob=session.get("dob"))
+                kundli_str = kundli_service.summarize_kundli(kundli_data, dob=session.get("dob"), dasha_info=dasha_info)
                 chart_data = kundli_service.extract_chart_data(kundli_data)
                 chart_json = json.dumps(chart_data) if chart_data else None
                 dasha_json = json.dumps(dasha_info) if dasha_info else None
