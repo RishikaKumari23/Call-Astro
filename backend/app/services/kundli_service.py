@@ -1,6 +1,7 @@
 import json
 import urllib.request
 import urllib.error
+from datetime import datetime
 from typing import Optional, Dict
 from app.utils.logger import logger
 
@@ -36,7 +37,20 @@ def get_house_lord(house_number: int, ascendant_sign: str) -> Optional[str]:
         return None
 
 
-def calculate_vimshottari_dasha(moon_degree: float, moon_star_lord: str, moon_pada: int) -> Optional[Dict]:
+def _parse_dob_to_age(dob: Optional[str]) -> float:
+    if not dob:
+        return 0.0
+    for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"]:
+        try:
+            dt = datetime.strptime(dob.strip(), fmt)
+            age_days = (datetime.now() - dt).days
+            return max(0.0, age_days / 365.25)
+        except Exception:
+            continue
+    return 0.0
+
+
+def calculate_vimshottari_dasha(moon_degree: float, moon_star_lord: str, moon_pada: int, dob: Optional[str] = None) -> Optional[Dict]:
     try:
         NAKSHATRA_ARC = 13.333333
 
@@ -69,21 +83,29 @@ def calculate_vimshottari_dasha(moon_degree: float, moon_star_lord: str, moon_pa
             })
             current_year += years
 
+        age_years = _parse_dob_to_age(dob)
+        current_maha = dasha_timeline[0]
+        for maha in dasha_timeline:
+            if maha["start_year"] <= age_years < maha["end_year"]:
+                current_maha = maha
+                break
+
         return {
             "birth_nakshatra": nakshatra_num,
             "nakshatra_lord": nakshatra_lord,
             "moon_pada": moon_pada,
             "balance_of_dasha_at_birth": round(balance_years, 2),
             "dasha_sequence": dasha_timeline,
-            "current_mahadasha": dasha_timeline[0],
+            "current_mahadasha": current_maha,
+            "age_years": age_years,
         }
     except Exception as e:
         logger.error(f"Dasha calculation failed: {e}")
         return None
 
 
-def calculate_full_dasha_periods(moon_degree: float, moon_star_lord: str, moon_pada: int) -> Optional[Dict]:
-    mahadasha_info = calculate_vimshottari_dasha(moon_degree, moon_star_lord, moon_pada)
+def calculate_full_dasha_periods(moon_degree: float, moon_star_lord: str, moon_pada: int, dob: Optional[str] = None) -> Optional[Dict]:
+    mahadasha_info = calculate_vimshottari_dasha(moon_degree, moon_star_lord, moon_pada, dob=dob)
     if not mahadasha_info:
         return None
 
@@ -93,45 +115,62 @@ def calculate_full_dasha_periods(moon_degree: float, moon_star_lord: str, moon_p
         maha_start_year = current_maha["start_year"]
         maha_total_years = DASHA_YEARS[maha_lord]
         maha_lord_idx = DASHA_SEQUENCE.index(maha_lord)
+        age_years = mahadasha_info.get("age_years", 0.0)
 
         antardasha_sequence = []
         elapsed = maha_start_year
+        current_antar = None
+
         for i in range(9):
             antar_lord_idx = (maha_lord_idx + i) % 9
             antar_lord = DASHA_SEQUENCE[antar_lord_idx]
             antar_years = (maha_total_years * DASHA_YEARS[antar_lord]) / 120
-            antardasha_sequence.append({
+            antar_entry = {
                 "lord": antar_lord,
                 "years": round(antar_years, 3),
                 "start_year": round(elapsed, 3),
                 "end_year": round(elapsed + antar_years, 3),
-            })
+            }
+            antardasha_sequence.append(antar_entry)
+            if elapsed <= age_years < (elapsed + antar_years):
+                current_antar = antar_entry
             elapsed += antar_years
 
-        mahadasha_info["antardasha_sequence"] = antardasha_sequence
-        mahadasha_info["current_antardasha"] = antardasha_sequence[0]
+        if not current_antar and antardasha_sequence:
+            current_antar = antardasha_sequence[0]
 
-        first_antar = antardasha_sequence[0]
-        antar_lord = first_antar["lord"]
-        antar_total_years = first_antar["years"]
+        mahadasha_info["antardasha_sequence"] = antardasha_sequence
+        mahadasha_info["current_antardasha"] = current_antar
+
+        antar_lord = current_antar["lord"]
+        antar_total_years = (maha_total_years * DASHA_YEARS[antar_lord]) / 120
+        antar_start_year = current_antar["start_year"]
         antar_lord_idx2 = DASHA_SEQUENCE.index(antar_lord)
 
         pratyantar_sequence = []
-        elapsed2 = first_antar["start_year"]
+        elapsed2 = antar_start_year
+        current_praty = None
+
         for i in range(9):
             praty_lord_idx = (antar_lord_idx2 + i) % 9
             praty_lord = DASHA_SEQUENCE[praty_lord_idx]
             praty_years = (antar_total_years * DASHA_YEARS[praty_lord]) / 120
-            pratyantar_sequence.append({
+            praty_entry = {
                 "lord": praty_lord,
                 "years": round(praty_years, 4),
                 "start_year": round(elapsed2, 4),
                 "end_year": round(elapsed2 + praty_years, 4),
-            })
+            }
+            pratyantar_sequence.append(praty_entry)
+            if elapsed2 <= age_years < (elapsed2 + praty_years):
+                current_praty = praty_entry
             elapsed2 += praty_years
 
+        if not current_praty and pratyantar_sequence:
+            current_praty = pratyantar_sequence[0]
+
         mahadasha_info["pratyantardasha_sequence"] = pratyantar_sequence
-        mahadasha_info["current_pratyantardasha"] = pratyantar_sequence[0]
+        mahadasha_info["current_pratyantardasha"] = current_praty
 
         return mahadasha_info
     except Exception as e:
@@ -184,7 +223,7 @@ class KundliService:
             logger.error(f"Failed to extract ascendant_data: {e}")
         return None
 
-    def _get_dasha_for_kundli(self, kundli_data: Dict) -> Optional[Dict]:
+    def _get_dasha_for_kundli(self, kundli_data: Dict, dob: Optional[str] = None) -> Optional[Dict]:
         try:
             moon_lord_data = kundli_data.get("planet_lords", {}).get("Moon", {})
             moon_degree = moon_lord_data.get("degree")
@@ -195,7 +234,7 @@ class KundliService:
                 logger.warning("Missing Moon degree/star_lord/pada — cannot calculate dasha")
                 return None
 
-            return calculate_full_dasha_periods(float(moon_degree), moon_star_lord, int(moon_pada))
+            return calculate_full_dasha_periods(float(moon_degree), moon_star_lord, int(moon_pada), dob=dob)
         except Exception as e:
             logger.error(f"Failed to derive dasha inputs: {e}")
             return None

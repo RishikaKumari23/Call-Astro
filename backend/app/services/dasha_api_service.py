@@ -18,10 +18,24 @@ FEATURE = "Mahadasha"
 
 
 def _parse_dt(date_str: str) -> Optional[datetime]:
-    try:
-        return datetime.strptime(date_str, DATE_FORMAT)
-    except (ValueError, TypeError):
+    if not date_str:
         return None
+    formats = [
+        "%d/%m/%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%Y-%m-%d",
+    ]
+    cleaned = str(date_str).strip()
+    for fmt in formats:
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except (ValueError, TypeError):
+            continue
+    return None
 
 
 class DashaApiService:
