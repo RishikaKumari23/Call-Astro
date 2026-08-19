@@ -9,7 +9,8 @@ router = APIRouter(prefix="/ingest", tags=["Ingestion"])
 async def check_ingest_status():
     """Check the current status of knowledge base indexing. Automatic indexing happens on server startup."""
     try:
-        # Check if chunks are loaded in vector memory
+        # Always ensure memory reflects the latest vector store file on disk
+        vector_store.load()
         total_chunks = len(vector_store.chunks)
         indexing_completed = total_chunks > 0
         
