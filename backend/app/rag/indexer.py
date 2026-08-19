@@ -44,9 +44,31 @@ class DocumentIndexer:
             text = []
             for page in doc:
                 page_text = page.get_text()
-                if page_text:
+                if page_text and page_text.strip():
                     text.append(page_text)
-            return "\n".join(text)
+
+            full_text = "\n".join(text)
+            if not full_text.strip():
+                logger.info(f"PDF {file_path} appears to be scanned/image-based. Performing OCR fallback...")
+                try:
+                    import pytesseract
+                    from PIL import Image
+                    import io
+
+                    ocr_text = []
+                    for idx, page in enumerate(doc):
+                        pix = page.get_pixmap(dpi=150)
+                        img = Image.open(io.BytesIO(pix.tobytes("png")))
+                        p_text = pytesseract.image_to_string(img)
+                        if p_text.strip():
+                            ocr_text.append(p_text)
+                        if (idx + 1) % 25 == 0 or (idx + 1) == len(doc):
+                            logger.info(f"OCR progress for {os.path.basename(file_path)}: {idx + 1}/{len(doc)} pages completed.")
+                    full_text = "\n".join(ocr_text)
+                except Exception as ocr_err:
+                    logger.error(f"OCR failed for PDF {file_path}: {ocr_err}")
+
+            return full_text
         except Exception as e:
             logger.error(f"Error parsing PDF file {file_path}: {e}")
             raise
