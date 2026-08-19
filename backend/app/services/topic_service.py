@@ -104,6 +104,11 @@ EVIDENCE_WEIGHTS = {
 }
 
 
+def get_ordinal(n: int) -> str:
+    if 11 <= (n % 100) <= 13:
+        return f"{n}th"
+    return f"{n}{['th', 'st', 'nd', 'rd', 'th', 'th', 'th', 'th', 'th', 'th'][n % 10]}"
+
 def classify_topic(message: str) -> Optional[str]:
     """Simple keyword-based topic classifier."""
     text_lower = message.lower()
@@ -508,14 +513,14 @@ def build_topic_emphasis(topic: str, planets: List[dict], ascendant_sign: str, d
 
     if house_sign:
         lord_str = f", ruled by {house_lord_name}" if house_lord_name else ""
-        lines.append(f"{house_num}th House (governs {topic}): occupied by {house_sign}{lord_str}")
+        lines.append(f"{get_ordinal(house_num)} House (governs {topic}): occupied by {house_sign}{lord_str}")
 
     if house_lord_name:
         lord_match = next((p for p in planets if p.get("name") == house_lord_name), None)
         if lord_match:
             lord_sign = lord_match.get("sign_name", "")
             lord_house = get_house_for_sign(lord_sign, ascendant_sign)
-            lord_house_str = f", in the {lord_house}th house" if lord_house else ""
+            lord_house_str = f", in the {get_ordinal(lord_house)} house" if lord_house else ""
             lines.append(f"{house_lord_name} ({house_num}th Lord): placed in {lord_sign}{lord_house_str}")
 
     for planet_name in config["planets"]:
@@ -523,7 +528,7 @@ def build_topic_emphasis(topic: str, planets: List[dict], ascendant_sign: str, d
         if match:
             sign = match.get("sign_name", "")
             house = get_house_for_sign(sign, ascendant_sign)
-            house_str = f", in the {house}th house" if house else ""
+            house_str = f", in the {get_ordinal(house)} house" if house else ""
             retro = " (retrograde)" if str(match.get("isRetro", "")).lower() == "true" else ""
             lines.append(f"{planet_name} (significator for {topic}): in {sign}{house_str}{retro}")
 
@@ -559,9 +564,9 @@ def build_explanation_footer(topic: Optional[str], ascendant_sign: Optional[str]
         house_num = config["house"]
         house_lord = get_house_lord(house_num, ascendant_sign)
         if house_lord:
-            factors.append(f"{house_num}th House ({house_lord})")
+            factors.append(f"{get_ordinal(house_num)} House ({house_lord})")
         else:
-            factors.append(f"{house_num}th House")
+            factors.append(f"{get_ordinal(house_num)} House")
         for planet in config["planets"]:
             factors.append(planet)
 
@@ -853,7 +858,7 @@ def build_reasoning_trace(
     if house_num:
         house_sign = get_sign_for_house(house_num, ascendant_sign)
         house_lord = get_house_lord(house_num, ascendant_sign)
-        detail = f"{house_num}th House governs {topic}"
+        detail = f"{get_ordinal(house_num)} House governs {topic}"
         if house_sign:
             detail += f" — occupied by {house_sign}"
         if house_lord:
@@ -870,7 +875,7 @@ def build_reasoning_trace(
                 sign = match.get("sign_name", "")
                 house = get_house_for_sign(sign, ascendant_sign)
                 retro = " (retrograde)" if str(match.get("isRetro", "")).lower() == "true" else ""
-                placements.append(f"{pname} in {sign} ({house}th house){retro}")
+                placements.append(f"{pname} in {sign} ({get_ordinal(house)} house){retro}")
         if placements:
             steps.append({
                 "step": step_num, "title": "Significator Planets",
@@ -1015,9 +1020,9 @@ def build_missing_evidence_note(
     house_num = config["house"]
     house_lord = get_house_lord(house_num, ascendant_sign) if ascendant_sign else None
     if house_lord and any(p.get("name") == house_lord for p in planets):
-        available.append(f"{house_num}th House lord ({house_lord}) placement")
+        available.append(f"{get_ordinal(house_num)} House lord ({house_lord}) placement")
     else:
-        missing.append(f"{house_num}th House lord placement")
+        missing.append(f"{get_ordinal(house_num)} House lord placement")
 
     for planet_name in config.get("planets", []):
         if any(p.get("name") == planet_name for p in planets):
