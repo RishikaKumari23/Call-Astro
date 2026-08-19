@@ -20,7 +20,7 @@ TOPIC_CHART_FACTORS = {
     },
     "health": {
         "house": 1, "planets": ["Saturn", "Mars", "Moon"],
-        "keywords": ["health", "sehat", "illness", "disease", "body", "bimari"],
+        "keywords": ["health", "sehat", "illness", "disease", "body", "bimari", "personality", "lagna", "ascendant", "gemstone", "dasha", "myself", "nature", "character"],
         "search_bias": "health disease 1st house 6th house Lagna Saturn Mars Moon",
         "divisional_chart": None,
     },
