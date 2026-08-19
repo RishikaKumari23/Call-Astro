@@ -734,8 +734,6 @@ class ChatService:
                    "dob": None, "birth_time": None, "birth_place": None, "language": language}
 
     def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits_sources: Optional[List[str]] = None) -> list:
-        if not topic:
-            return []
         try:
             cached_raw = session.get("kundli_raw")
             cached_dasha = session.get("kundli_dasha")

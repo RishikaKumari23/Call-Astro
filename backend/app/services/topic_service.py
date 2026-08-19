@@ -20,7 +20,7 @@ TOPIC_CHART_FACTORS = {
     },
     "health": {
         "house": 1, "planets": ["Saturn", "Mars", "Moon"],
-        "keywords": ["health", "sehat", "illness", "disease", "body", "bimari", "personality", "lagna", "ascendant", "gemstone", "dasha", "mahadasha", "antardasha", "myself", "nature", "character"],
+        "keywords": ["health", "sehat", "illness", "disease", "body", "bimari", "personality", "lagna", "ascendant", "gemstone", "dasha", "mahadasha", "antardasha", "myself", "nature", "character", "ashtakavarga", "bindus", "bindu", "transit", "transits", "kakshya", "shodhana", "sav", "nakshatra", "planet", "planets"],
         "search_bias": "health disease 1st house 6th house Lagna Saturn Mars Moon",
         "divisional_chart": None,
     },
@@ -838,9 +838,10 @@ def build_reasoning_trace(
     computed elsewhere in the pipeline. Each step is {step, title, detail} —
     purely structural, no LLM call, so it's fast and 100% traceable to real
     inputs rather than an LLM's self-report of its own reasoning."""
-    if not topic or not ascendant_sign:
+    if not ascendant_sign:
         return []
 
+    effective_topic = topic or "health"
     steps = []
     step_num = 1
 
@@ -853,17 +854,17 @@ def build_reasoning_trace(
         steps.append({"step": step_num, "title": "Current Dasha Period", "detail": detail})
         step_num += 1
 
-    config = TOPIC_CHART_FACTORS.get(topic, {})
+    config = TOPIC_CHART_FACTORS.get(topic, {}) if topic else TOPIC_CHART_FACTORS.get("health", {})
     house_num = config.get("house")
     if house_num:
         house_sign = get_sign_for_house(house_num, ascendant_sign)
         house_lord = get_house_lord(house_num, ascendant_sign)
-        detail = f"{get_ordinal(house_num)} House governs {topic}"
+        detail = f"{get_ordinal(house_num)} House governs {topic if topic else 'Self & General Chart'}"
         if house_sign:
             detail += f" — occupied by {house_sign}"
         if house_lord:
             detail += f", ruled by {house_lord}"
-        steps.append({"step": step_num, "title": f"Relevant House ({house_num}th)", "detail": detail})
+        steps.append({"step": step_num, "title": f"Relevant House ({get_ordinal(house_num)})", "detail": detail})
         step_num += 1
 
     sig_planets = config.get("planets", [])
