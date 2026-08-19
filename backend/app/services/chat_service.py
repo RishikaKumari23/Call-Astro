@@ -246,8 +246,6 @@ class ChatService:
         return bundle
 
     def _get_dasha_timeline(self, session_id: str, session: Dict, topic: Optional[str], language: str) -> str:
-        if not topic:
-            return ""
         try:
             cached_tree_raw = session.get("dasha_tree_raw")
             dasha_tree = None
@@ -467,14 +465,15 @@ class ChatService:
 
             topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = ""
             evidence_vote = None
-            if is_astrology and not missing_fields and topic:
-                bundle = self._get_topic_bundle(session_id, session, topic, language)
-                topic_emphasis = bundle["emphasis"]
-                divisional_text = bundle["divisional"]
-                consistency_note = bundle["consistency"]
-                missing_evidence = bundle["missing_evidence"]
-                dasha_timeline_str = bundle["timeline"]
-                evidence_vote = bundle.get("evidence_vote")
+            if is_astrology and not missing_fields:
+                dasha_timeline_str = self._get_dasha_timeline(session_id, session, topic or "general", language)
+                if topic:
+                    bundle = self._get_topic_bundle(session_id, session, topic, language)
+                    topic_emphasis = bundle["emphasis"]
+                    divisional_text = bundle["divisional"]
+                    consistency_note = bundle["consistency"]
+                    missing_evidence = bundle["missing_evidence"]
+                    evidence_vote = bundle.get("evidence_vote")
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
             user_memory = self._get_user_memory_block(session, topic) if (is_astrology and not missing_fields) else ""
@@ -641,14 +640,15 @@ class ChatService:
 
             topic_emphasis = divisional_text = consistency_note = missing_evidence = dasha_timeline_str = ""
             evidence_vote = None
-            if is_astrology and not missing_fields and topic:
-                bundle = self._get_topic_bundle(session_id, session, topic, language)
-                topic_emphasis = bundle["emphasis"]
-                divisional_text = bundle["divisional"]
-                consistency_note = bundle["consistency"]
-                missing_evidence = bundle["missing_evidence"]
-                dasha_timeline_str = bundle["timeline"]
-                evidence_vote = bundle.get("evidence_vote")
+            if is_astrology and not missing_fields:
+                dasha_timeline_str = self._get_dasha_timeline(session_id, session, topic or "general", language)
+                if topic:
+                    bundle = self._get_topic_bundle(session_id, session, topic, language)
+                    topic_emphasis = bundle["emphasis"]
+                    divisional_text = bundle["divisional"]
+                    consistency_note = bundle["consistency"]
+                    missing_evidence = bundle["missing_evidence"]
+                    evidence_vote = bundle.get("evidence_vote")
 
             final_kundli_data = self._build_final_kundli_data(kundli_str, topic_emphasis, divisional_text, yoga_text, missing_evidence)
 
