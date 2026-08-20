@@ -71,7 +71,8 @@ def calculate_vimshottari_dasha(moon_degree: float, moon_star_lord: str, moon_pa
 
         dasha_timeline = []
         current_year = 0.0
-        for i in range(9):
+        # 18 periods = 2 full 120-year cycles to cover users of all ages without truncation
+        for i in range(18):
             lord_idx = (start_lord_idx + i) % 9
             lord = DASHA_SEQUENCE[lord_idx]
             years = balance_years if i == 0 else DASHA_YEARS[lord]
@@ -321,7 +322,7 @@ class KundliService:
                 for h in range(1, 13):
                     sign_idx = (asc_index + h - 1) % 12
                     sign_name = ZODIAC[sign_idx]
-                    house_rulerships.append(f"{h}th House ({sign_name}, ruled by {ZODIAC_LORDS[sign_name]})")
+                    house_rulerships.append(f"{h}{_ordinal(h)} House ({sign_name}, ruled by {ZODIAC_LORDS[sign_name]})")
                 lines.append("House Rulerships: " + ", ".join(house_rulerships))
 
             chart_positions = kundli_data.get("chart_planet_positions", {})
@@ -329,6 +330,8 @@ class KundliService:
             d9_asc = d9.get("Ascendant", {}).get("sign_name") if d9 else None
             if d9_asc:
                 lines.append(f"Navamsa (D9) Ascendant: {d9_asc}")
+            else:
+                lines.append("Navamsa (D9) Ascendant: Not available in birth data")
 
             if not dasha_info:
                 dasha_info = self._get_dasha_for_kundli(kundli_data)
@@ -423,7 +426,7 @@ class KundliService:
     def summarize_divisional_chart(self, kundli_data: Dict, chart_code: str, purpose: str) -> str:
         chart = self.extract_divisional_chart(kundli_data, chart_code)
         if not chart or not chart.get("ascendant_sign"):
-            return ""
+            return f"{chart_code} Chart (for {purpose}): Data not available in current chart"
 
         lines = [f"{chart_code} Chart (for {purpose}): Ascendant is {chart['ascendant_sign']}"]
         planet_strs = [f"{name} in {sign}" for name, sign in chart.get("planets", {}).items() if sign]
