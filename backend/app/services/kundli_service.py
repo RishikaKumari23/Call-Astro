@@ -53,7 +53,7 @@ def _parse_dob_to_age(dob: Optional[str]) -> float:
 
 def calculate_vimshottari_dasha(moon_degree: float, moon_star_lord: str, moon_pada: int, dob: Optional[str] = None) -> Optional[Dict]:
     try:
-        NAKSHATRA_ARC = 13.333333
+        NAKSHATRA_ARC = 360.0 / 27.0  # precise float — 13.3333...° per nakshatra
 
         nakshatra_num = int(moon_degree / NAKSHATRA_ARC) + 1
         nakshatra_lord = NAKSHATRA_LORDS[nakshatra_num - 1]
@@ -279,7 +279,12 @@ class KundliService:
                 if sign in ZODIAC and ascendant_sign in ZODIAC:
                     sign_idx = ZODIAC.index(sign)
                     house_num = (sign_idx - asc_index + 12) % 12 + 1
-                    house_str = f" ({house_num}th House)"
+                    def _ordinal(n):
+                        return ("st" if n % 10 == 1 and n % 100 != 11
+                                else "nd" if n % 10 == 2 and n % 100 != 12
+                                else "rd" if n % 10 == 3 and n % 100 != 13
+                                else "th")
+                    house_str = f" ({house_num}{_ordinal(house_num)} House)"
                 
                 lord_data = planet_lords.get(name, {})
                 star_lord = lord_data.get("star_lord")
@@ -333,7 +338,9 @@ class KundliService:
                 antar = dasha_info.get("current_antardasha")
                 praty = dasha_info.get("current_pratyantardasha")
 
-                dasha_line = f"Current Dasha Period (approximate, calculated): Mahadasha={maha['lord']}"
+                dasha_source = dasha_info.get("source", "calculated")
+                dasha_label = "Real API" if dasha_source == "real_api" else "approximate, calculated"
+                dasha_line = f"Current Dasha Period ({dasha_label}): Mahadasha={maha['lord']}"
                 if antar:
                     dasha_line += f", Antardasha={antar['lord']}"
                 if praty:
@@ -345,9 +352,16 @@ class KundliService:
                     if dob:
                         try:
                             from datetime import datetime as _dt
-                            birth_year = _dt.strptime(dob.strip(), "%d-%m-%Y").year
-                            approx_year = birth_year + int(nxt["start_year"])
-                            lines.append(f"Next Mahadasha: {nxt['lord']} (approx. begins around {approx_year})")
+                            birth_dt = None
+                            for _fmt in ["%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"]:
+                                try:
+                                    birth_dt = _dt.strptime(dob.strip(), _fmt)
+                                    break
+                                except ValueError:
+                                    continue
+                            if birth_dt:
+                                approx_year = birth_dt.year + int(nxt["start_year"])
+                                lines.append(f"Next Mahadasha: {nxt['lord']} (approx. begins around {approx_year})")
                         except (ValueError, TypeError):
                             pass
 
@@ -462,6 +476,7 @@ class KundliService:
                     current_period = dasha_api_service.find_current_period(dasha_tree)
                     if current_period:
                         logger.info("Using REAL dasha API data (with actual calendar dates)")
+                        current_period["source"] = "real_api"  # flag so summarize_kundli labels it correctly
                         return current_period
         except Exception as e:
             logger.warning(f"Real dasha API failed, falling back to calculated dasha: {e}")
