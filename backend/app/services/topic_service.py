@@ -833,6 +833,7 @@ def build_reasoning_trace(
     consistency_check: Optional[dict],
     rag_sources: Optional[List[str]] = None,
     evidence_vote: Optional[Dict] = None,
+    topic_result=None,  # Optional[TopicResult] from hybrid_router — avoids circular import
 ) -> List[dict]:
     """Assemble a numbered, inspectable reasoning chain from data already
     computed elsewhere in the pipeline. Each step is {step, title, detail} —
@@ -844,6 +845,31 @@ def build_reasoning_trace(
     effective_topic = topic or "health"
     steps = []
     step_num = 1
+
+    # ── Step 0: Classification metadata from HybridRouter ──────────────────
+    if topic_result is not None:
+        method_labels = {
+            "keyword": "Instant keyword match",
+            "semantic": "Semantic vector similarity",
+            "llm": "LLM structured classifier",
+            "none": "General chart query",
+        }
+        method_label = method_labels.get(topic_result.method, topic_result.method)
+        confidence_pct = int(topic_result.confidence * 100)
+        topic_label = topic.capitalize() if topic else "General Chart"
+        detail = f"Topic: {topic_label} — detected via {method_label} ({confidence_pct}% confidence)"
+        if topic_result.detected_concepts:
+            detail += f". Concepts: {', '.join(topic_result.detected_concepts[:5])}"
+        if topic_result.detected_houses:
+            house_strs = [get_ordinal(h) for h in topic_result.detected_houses[:4]]
+            detail += f". Houses in query: {', '.join(house_strs)}"
+        steps.append({"step": step_num, "title": "🔍 Classification", "detail": detail})
+        step_num += 1
+
+        # LLM summary only shown when Layer 3 fired
+        if topic_result.method == "llm" and topic_result.llm_summary:
+            steps.append({"step": step_num, "title": "🤖 Query Summary", "detail": topic_result.llm_summary})
+            step_num += 1
 
     if dasha_info:
         maha = dasha_info.get("current_mahadasha", {})
@@ -925,7 +951,7 @@ def build_reasoning_trace(
     if rag_sources:
         unique_sources = list(dict.fromkeys(rag_sources))[:3]
         steps.append({
-            "step": step_num, "title": "Classical References Consulted",
+            "step": step_num, "title": "📚 Classical References Consulted",
             "detail": ", ".join(unique_sources)
         })
         step_num += 1

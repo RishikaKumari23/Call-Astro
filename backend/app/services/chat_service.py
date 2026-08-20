@@ -19,6 +19,7 @@ from app.services.topic_service import (
     rank_favorable_periods, format_dasha_timeline_for_prompt,
     build_evidence_vote, format_evidence_vote_for_prompt
 )
+from app.services.hybrid_router import route_topic
 from app.services.dasha_api_service import dasha_api_service
 from app.services.yoga_service import detect_yogas, format_yogas_for_prompt
 
@@ -447,7 +448,8 @@ class ChatService:
                         "birth_place": session.get("birth_place"), "language": language
                     }
 
-            topic = classify_topic(message_text) if (is_astrology and not missing_fields) else None
+            topic_result = route_topic(message_text, self.embeddings_provider) if (is_astrology and not missing_fields) else None
+            topic = topic_result.topic if topic_result else None
             intent = classify_intent(message_text) if (is_astrology and not missing_fields) else "general"
             response_contract = get_response_contract(intent)
 
@@ -529,7 +531,7 @@ class ChatService:
 
             if is_astrology and not missing_fields:
                 try:
-                    trace = self._build_reasoning_trace(session, topic, rag_sources)
+                    trace = self._build_reasoning_trace(session, topic, rag_sources, topic_result=topic_result)
                     db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
                 except Exception as trace_err:
                     logger.error(f"Reasoning trace caching failed: {trace_err}")
@@ -622,7 +624,8 @@ class ChatService:
                            "birth_place": session.get("birth_place"), "language": language}
                     return
 
-            topic = classify_topic(message_text) if (is_astrology and not missing_fields) else None
+            topic_result = route_topic(message_text, self.embeddings_provider) if (is_astrology and not missing_fields) else None
+            topic = topic_result.topic if topic_result else None
             intent = classify_intent(message_text) if (is_astrology and not missing_fields) else "general"
             response_contract = get_response_contract(intent)
 
@@ -708,7 +711,7 @@ class ChatService:
 
             if is_astrology and not missing_fields:
                 try:
-                    trace = self._build_reasoning_trace(session, topic, rag_sources)
+                    trace = self._build_reasoning_trace(session, topic, rag_sources, topic_result=topic_result)
                     db.update_session(session_id, {"last_reasoning_trace": json.dumps(trace)})
                 except Exception as trace_err:
                     logger.error(f"Reasoning trace caching failed: {trace_err}")
@@ -733,7 +736,7 @@ class ChatService:
             yield {"type": "done", "session_id": session_id, "message": fallback,
                    "dob": None, "birth_time": None, "birth_place": None, "language": language}
 
-    def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits_sources: Optional[List[str]] = None) -> list:
+    def _build_reasoning_trace(self, session: Dict, topic: Optional[str], rag_hits_sources: Optional[List[str]] = None, topic_result=None) -> list:
         try:
             cached_raw = session.get("kundli_raw")
             cached_dasha = session.get("kundli_dasha")
@@ -751,7 +754,8 @@ class ChatService:
             evidence_vote = topic_cache.get("evidence_vote") if topic_cache else None
 
             return build_reasoning_trace(
-                topic, ascendant_sign, planets, dasha_info, consistency_check, rag_hits_sources, evidence_vote
+                topic, ascendant_sign, planets, dasha_info, consistency_check,
+                rag_hits_sources, evidence_vote, topic_result=topic_result
             )
         except Exception as e:
             logger.error(f"Reasoning trace build failed: {e}")
