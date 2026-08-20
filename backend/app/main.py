@@ -61,6 +61,15 @@ async def startup_event():
     indexing_thread = threading.Thread(target=background_index_knowledge_base, daemon=True)
     indexing_thread.start()
 
+    # Pre-warm the hybrid router semantic anchor cache in background
+    # so the first user request is never slowed down by embedding computation
+    try:
+        from app.services.hybrid_router import prewarm_anchor_cache
+        from app.services.chat_service import chat_service
+        prewarm_anchor_cache(chat_service.embeddings_provider)
+    except Exception as e:
+        logger.warning(f"Hybrid router pre-warm failed (non-critical): {e}")
+
 # Mount routers
 app.include_router(chat.router, prefix="/api")
 app.include_router(session.router, prefix="/api")

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import List, Optional, TYPE_CHECKING
 
@@ -127,28 +128,47 @@ _TOPIC_ANCHORS: dict[str, list[str]] = {
     ],
 }
 
-# Cache: topic -> mean anchor embedding vector, built lazily on first use
+# Cache: topic -> mean anchor embedding vector
 _anchor_cache: dict[str, np.ndarray] = {}
+_anchor_cache_ready = threading.Event()  # signals when cache is built
 
 
 def _build_anchor_cache(embeddings_provider: "EmbeddingsProvider") -> None:
-    """Embed all anchor phrases once and cache the mean vector per topic."""
+    """Embed all anchor phrases and cache the mean vector per topic.
+    Called in a background thread at startup — never blocks a user request."""
     global _anchor_cache
-    if _anchor_cache:
+    if _anchor_cache_ready.is_set():
         return  # already built
 
-    logger.info("HybridRouter: building semantic anchor cache…")
+    logger.info("HybridRouter: building semantic anchor cache in background…")
+    cache = {}
     for topic, phrases in _TOPIC_ANCHORS.items():
         try:
             vecs = []
             for phrase in phrases:
                 vec = embeddings_provider.get_embedding(phrase)
                 vecs.append(np.array(vec, dtype=np.float32))
-            _anchor_cache[topic] = np.mean(vecs, axis=0)
+            cache[topic] = np.mean(vecs, axis=0)
         except Exception as e:
             logger.warning(f"HybridRouter: failed to embed anchors for '{topic}': {e}")
 
+    _anchor_cache.update(cache)
+    _anchor_cache_ready.set()
     logger.info(f"HybridRouter: anchor cache ready for topics: {list(_anchor_cache.keys())}")
+
+
+def prewarm_anchor_cache(embeddings_provider: "EmbeddingsProvider") -> None:
+    """Launch background thread to pre-warm the semantic anchor cache.
+    Call this once from app startup so the cache is ready by the time
+    users start asking questions."""
+    t = threading.Thread(
+        target=_build_anchor_cache,
+        args=(embeddings_provider,),
+        daemon=True,
+        name="hybrid-router-prewarm",
+    )
+    t.start()
+    logger.info("HybridRouter: anchor cache pre-warm thread started.")
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -163,10 +183,12 @@ def _semantic_classify(
     embeddings_provider: "EmbeddingsProvider",
     threshold: float = 0.50,
 ) -> tuple[Optional[str], float]:
-    """Return (topic, confidence) or (None, 0.0) if below threshold."""
+    """Return (topic, confidence) or (None, 0.0) if below threshold.
+    Skipped gracefully if the anchor cache hasn't been built yet."""
     try:
-        _build_anchor_cache(embeddings_provider)
-        if not _anchor_cache:
+        # Skip Layer 2 entirely if cache not ready — don't block the user
+        if not _anchor_cache_ready.is_set():
+            logger.debug("HybridRouter L2: anchor cache not ready yet, skipping semantic layer.")
             return None, 0.0
 
         query_vec = np.array(embeddings_provider.get_embedding(text), dtype=np.float32)
