@@ -4,8 +4,9 @@ import urllib.error
 from datetime import datetime
 from typing import Optional, Dict
 from app.utils.logger import logger
+from app.config.settings import settings
 
-FUNCTION_URL = "https://vutgjzjv7ilckzs7ooeh5gnnyy0xnkdz.lambda-url.ap-south-1.on.aws/"
+FUNCTION_URL = settings.KUNDLI_LAMBDA_URL
 
 DASHA_SEQUENCE = ["Ketu", "Venus", "Sun", "Moon", "Mars", "Rahu", "Jupiter", "Saturn", "Mercury"]
 DASHA_YEARS = {

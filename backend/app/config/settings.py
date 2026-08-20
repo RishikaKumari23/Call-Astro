@@ -42,10 +42,12 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 150
     TOP_K_RETRIEVAL: int = 4
     MIN_RAG_RELEVANCE: float = 0.3  # Minimum hybrid score to include a chunk in context (0.0–1.0)
-    HYBRID_ALPHA: float = 0.5 # Balance weight between lexical (BM25) and vector cosine search
-    MIN_RAG_RELEVANCE: float = 0.3
-    # Dasha Lambda (separate, bearer-token-authenticated API providing
-    # real calculated Mahadasha/Antardasha/Pratyantardasha with actual dates)
+    HYBRID_ALPHA: float = 0.5  # Balance weight between lexical (BM25) and vector cosine search
+
+    # External Lambda APIs
+    # Kundli chart generation Lambda (AWS ap-south-1)
+    KUNDLI_LAMBDA_URL: str = "https://vutgjzjv7ilckzs7ooeh5gnnyy0xnkdz.lambda-url.ap-south-1.on.aws/"
+    # Dasha calculation Lambda (separate bearer-token-authenticated API)
     DASHA_LAMBDA_URL: str = "https://bivrov2febq5ued37psv2hcxyi0wlxet.lambda-url.ap-south-1.on.aws/"
     DASHA_LAMBDA_BEARER_TOKEN: str = "f83c6105-1731-4cd9-9d94-9543ff01bfe1"
 

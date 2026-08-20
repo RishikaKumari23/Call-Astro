@@ -94,6 +94,8 @@ class ChatService:
                     "kundli_dasha": dasha_json,
                     "kundli_full_raw": full_raw_json,
                     "yoga_text": yoga_text,
+                    "latitude": lat,        # saved so _get_dasha_timeline always has coords
+                    "longitude": lon,       # without needing to re-geocode
                     "topic_cache": None,        # invalidate any stale per-topic cache
                     "dasha_tree_raw": None,     # invalidate — refetched lazily on next timeline need
                 }
