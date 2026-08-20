@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     TOP_K_RETRIEVAL: int = 4
     MIN_RAG_RELEVANCE: float = 0.3  # Minimum hybrid score to include a chunk in context (0.0–1.0)
     HYBRID_ALPHA: float = 0.5 # Balance weight between lexical (BM25) and vector cosine search
-
+    MIN_RAG_RELEVANCE: float = 0.3
     # Dasha Lambda (separate, bearer-token-authenticated API providing
     # real calculated Mahadasha/Antardasha/Pratyantardasha with actual dates)
     DASHA_LAMBDA_URL: str = "https://bivrov2febq5ued37psv2hcxyi0wlxet.lambda-url.ap-south-1.on.aws/"
